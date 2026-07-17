@@ -51,6 +51,23 @@ contract MonadHeaderReaderTest is Test {
         harness.readNumberAndMixHash(hex"c28101");
     }
 
+    function test_RevertsWhenLongStringFormEncodesPayloadShorterThan56Bytes() public {
+        vm.expectRevert(MonadHeaderReader.MalformedRlp.selector);
+        harness.readNumberAndMixHash(hex"c3b80180");
+    }
+
+    function test_RevertsWhenLongListFormEncodesPayloadShorterThan56Bytes() public {
+        vm.expectRevert(MonadHeaderReader.MalformedRlp.selector);
+        harness.readNumberAndMixHash(hex"f80180");
+    }
+
+    function test_RevertsWhenLengthOfLengthHasALeadingZero() public {
+        bytes memory nonCanonicalHeader = abi.encodePacked(hex"f90038", new bytes(56));
+
+        vm.expectRevert(MonadHeaderReader.MalformedRlp.selector);
+        harness.readNumberAndMixHash(nonCanonicalHeader);
+    }
+
     function test_RevertsWhenBlockNumberIsLongerThan32Bytes() public {
         bytes memory numberBytes = new bytes(33);
         numberBytes[0] = 0x01;
