@@ -41,3 +41,7 @@ next-env.d.ts
 /outputs/
 /work/
 /.superpowers/
+
+# foundry
+/cache/
+/contracts/out/
