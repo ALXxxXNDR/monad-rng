@@ -165,7 +165,9 @@ bytes32 expected = keccak256(
 
 Cover too-early calls, header/block mismatch, requester-only timing, T+64
 permissionless rescue, duplicate finalization, pending-count release, and
-permanent result reads.
+permanent result reads. Cover the last EIP-2935-valid block and permissionless
+no-refund expiration on the following block. Test deterministic rejection
+sampling with a forced rejection candidate.
 
 - [ ] **Step 6: Run Tx2 tests and verify RED**
 
@@ -182,7 +184,10 @@ Expected: tests fail because finalization behavior is missing.
 Authenticate recent targets with `blockhash`; otherwise query
 `0x0000F90827F1C53a10cb7A02335B175320002935`. Verify all encoded block numbers,
 derive and store one seed, and release one pending slot before emitting the
-finalization event.
+finalization event. Pack each stored request into three slots, derive the fixed
+target offsets when reading, use unbiased bounded draws, and allow anyone to
+mark a request expired only after its first target leaves the 8,191-block
+history window. Expiration releases local capacity without a refund or reward.
 
 - [ ] **Step 8: Run all lifecycle tests and verify GREEN**
 
@@ -446,4 +451,3 @@ git commit -m "chore: verify Monad RND release"
 Create or reuse the site project, push the exact validated commit, package the
 matching build, save one version, deploy it privately, and poll until production
 status succeeds.
-

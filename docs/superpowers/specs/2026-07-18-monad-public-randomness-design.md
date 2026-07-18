@@ -86,7 +86,7 @@ Fixed algorithm settings:
 - first target: request block + 8;
 - second target: first target + 16;
 - third target: second target + 16;
-- owner finalization opens after the third target is two blocks old;
+- requester finalization opens after the third target is two blocks old;
 - permissionless rescue opens at third target + 64.
 
 Tx1:
@@ -113,6 +113,14 @@ Tx2 verifies ownership timing, authenticates the three headers, verifies their
 encoded block numbers, derives the seed, stores it exactly once, and decrements
 the platform-local pending count. Duplicate finalization is rejected.
 
+The last finalizable current block is `firstTarget + 8,191`, which equals
+`thirdTarget + 8,159`. If nobody finalizes by that block, the first target
+leaves EIP-2935's history window and the request can no longer be
+authenticated. Beginning on the next block, anyone may call
+`expireRequest(requestId)`. Expiration stores a permanent expired status and
+releases one platform-local pending slot, but never invents a result, refunds
+the request price, or pays the cleanup caller.
+
 Views:
 
 ```solidity
@@ -121,8 +129,13 @@ function draw(uint256 requestId, uint256 upperBound) external view returns (uint
 function protocolFee() external pure returns (uint256);
 ```
 
-`protocolFee()` always returns zero. `draw` returns a deterministic uniform
-value in `[0, upperBound)`.
+`protocolFee()` always returns zero. `draw` uses domain-separated deterministic
+rejection sampling to return an unbiased bounded value in `[0, upperBound)`.
+
+The internal request representation uses three storage slots: packed
+requester/request block/status, packed finalizer/price paid, and the permanent
+result. Target blocks are derived from their fixed offsets instead of being
+stored separately.
 
 Platform administration affects only future requests:
 
@@ -150,10 +163,15 @@ on a predeployed canonical factory.
 - Each instance has a hard `maxPending` cap.
 - When platform A reaches its cap, only A's Tx1 is paused by capacity.
 - Tx2 remains open so A can recover.
+- After the historical proof window closes, permissionless expiry releases A's
+  local pending slot without refund or protocol-funded cleanup.
 - Platforms B and C use separate state and continue normally.
 - There is no on-chain loop over pending requests.
 - Every request is found directly by `(platform contract, requestId)`.
 - Per-wallet limits may improve UX but are not treated as Sybil protection.
+- An economically meaningful application must bind payment, inventory,
+  eligibility, and exactly one request ID during Tx1. It must not let a user
+  submit many free requests and redeem only a favorable ID.
 - If a platform sponsors Tx1 gas, that platform must add its own coupons,
   eligibility rules, and daily budget.
 
@@ -193,7 +211,8 @@ No write permission or backend indexer is required.
 - Target not ready: keep Tx2 disabled and show remaining blocks.
 - RPC lacks `debug_getRawHeader`: explain that a compatible RPC is required.
 - History expired: explain that the request can no longer be authenticated if
-  it was never finalized.
+  it was never finalized, and offer the permissionless no-refund expiry action
+  to release that platform's local pending slot.
 - Duplicate/finalized request: refresh and display the stored result.
 - Wallet rejection: return to the prior stable UI state.
 
@@ -236,4 +255,3 @@ All authoritative results are read from the platform contract.
 - Because the authors hold no funded deployment key, the landing page performs
   live platform-instance deployment through the connected user's wallet.
 - Contract source, ABI, and creation bytecode ship with the open-source site.
-
