@@ -30,6 +30,14 @@ contract ReentrantPlatformOwner {
     }
 }
 
+contract PlatformRandomnessDrawHarness is PlatformRandomness {
+    constructor() PlatformRandomness(address(this), "Draw Harness", 0, 1) {}
+
+    function exposedDraw(bytes32 seed, uint256 upperBound) external pure returns (uint256) {
+        return _draw(seed, upperBound);
+    }
+}
+
 contract PlatformRandomnessTest is Test {
     address private constant HISTORY_STORAGE = 0x0000F90827F1C53a10cb7A02335B175320002935;
     uint256 private constant FIXTURE_BLOCK = 45_730_415;
@@ -51,6 +59,7 @@ contract PlatformRandomnessTest is Test {
     event RandomnessFinalized(
         uint256 indexed requestId, address indexed requester, address indexed finalizer, bytes32 result
     );
+    event RandomnessRequestExpired(uint256 indexed requestId, address indexed requester, address indexed expirer);
 
     address private ownerA = makeAddr("ownerA");
     address private ownerB = makeAddr("ownerB");
@@ -92,12 +101,63 @@ contract PlatformRandomnessTest is Test {
         assertEq(request.thirdTargetBlock, 1_040);
         assertEq(request.pricePaid, 1 ether);
         assertFalse(request.finalized);
+        assertFalse(request.expired);
         assertEq(request.result, bytes32(0));
         assertEq(request.finalizer, address(0));
         assertEq(platformA.pendingCount(), 1);
         assertEq(platformA.nextRequestId(), 2);
         assertEq(address(platformA).balance, 1 ether);
         assertEq(platformA.platformName(), "Platform A");
+    }
+
+    function test_RequestStoresEachRequestInExactlyThreeStorageSlots() public {
+        vm.prank(alice);
+        platformA.requestRandomness{value: 1 ether}();
+
+        bytes32 firstRequestSlot = keccak256(abi.encode(uint256(1), uint256(7)));
+        bytes32 slot0 = vm.load(address(platformA), firstRequestSlot);
+        bytes32 slot1 = vm.load(address(platformA), bytes32(uint256(firstRequestSlot) + 1));
+        bytes32 slot2 = vm.load(address(platformA), bytes32(uint256(firstRequestSlot) + 2));
+        bytes32 slot3 = vm.load(address(platformA), bytes32(uint256(firstRequestSlot) + 3));
+
+        assertEq(address(uint160(uint256(slot0))), alice);
+        assertEq(uint64(uint256(slot0) >> 160), uint64(1_000));
+        assertEq(uint8(uint256(slot0) >> 224), 1, "pending status is packed into slot 0");
+        assertEq(address(uint160(uint256(slot1))), address(0));
+        assertEq(uint96(uint256(slot1) >> 160), uint96(1 ether));
+        assertEq(slot2, bytes32(0), "result owns request slot 2");
+        assertEq(slot3, bytes32(0), "a request must not allocate a fourth slot");
+    }
+
+    function test_RequestRejectsBlockNumberThatCannotFitCompressedSnapshot() public {
+        uint256 tooLarge = uint256(type(uint64).max) - 39;
+        vm.roll(tooLarge);
+
+        vm.expectRevert(abi.encodeWithSelector(PlatformRandomness.BlockNumberTooLarge.selector, tooLarge));
+        vm.prank(alice);
+        platformA.requestRandomness{value: 1 ether}();
+    }
+
+    function test_RequestRejectsPriceThatCannotFitCompressedSnapshot() public {
+        uint256 tooLarge = uint256(type(uint96).max) + 1;
+
+        vm.expectRevert(abi.encodeWithSelector(PlatformRandomness.PriceTooLarge.selector, tooLarge));
+        new PlatformRandomness(ownerA, "Expensive", tooLarge, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(PlatformRandomness.PriceTooLarge.selector, tooLarge));
+        vm.prank(ownerA);
+        platformA.setRequestPrice(tooLarge);
+    }
+
+    function test_RequestAcceptsLargestPriceThatFitsCompressedSnapshot() public {
+        uint256 largest = type(uint96).max;
+        PlatformRandomness expensive = new PlatformRandomness(ownerA, "Expensive", largest, 1);
+        vm.deal(alice, largest);
+
+        vm.prank(alice);
+        uint256 requestId = expensive.requestRandomness{value: largest}();
+
+        assertEq(expensive.getRequest(requestId).pricePaid, largest);
     }
 
     function test_RequestCanBeFreeWhileCallerStillSubmitsOwnTransaction() public {
@@ -563,12 +623,152 @@ contract PlatformRandomnessTest is Test {
         platformA.draw(requestId, 0);
     }
 
+    function test_DrawAcceptsCandidateAtOrAboveRejectionThresholdDirectly() public {
+        PlatformRandomnessDrawHarness harness = new PlatformRandomnessDrawHarness();
+
+        assertEq(harness.exposedDraw(bytes32(uint256(123)), 100), 23);
+    }
+
+    function test_DrawDomainSeparatesAndRehashesRejectedCandidate() public {
+        PlatformRandomnessDrawHarness harness = new PlatformRandomnessDrawHarness();
+        bytes32 seed = bytes32(0);
+        uint256 firstRehash = uint256(keccak256(abi.encode("MONAD_PUBLIC_RANDOMNESS_DRAW_V1", seed, uint256(0))));
+
+        assertGe(firstRehash, 36, "fixture must accept the first domain-separated rehash");
+        assertEq(harness.exposedDraw(seed, 100), firstRehash % 100);
+    }
+
+    function test_ExpireRejectsAtLastFinalizableBlockAndAllowsAnyoneAtNextBlock() public {
+        vm.prank(ownerA);
+        platformA.setMaxPending(1);
+        (uint256 requestId, PlatformRandomness.Request memory request) = _requestForAlice(platformA, 1 ether);
+        uint256 lastFinalizableBlock = request.firstTargetBlock + 8_191;
+        uint256 firstExpirationBlock = lastFinalizableBlock + 1;
+
+        vm.roll(lastFinalizableBlock);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PlatformRandomness.ExpirationTooEarly.selector, lastFinalizableBlock, firstExpirationBlock
+            )
+        );
+        vm.prank(bob);
+        platformA.expireRequest(requestId);
+
+        uint256 aliceBalance = alice.balance;
+        uint256 bobBalance = bob.balance;
+        uint256 platformBalance = address(platformA).balance;
+
+        vm.roll(firstExpirationBlock);
+        vm.expectEmit(true, true, true, true, address(platformA));
+        emit RandomnessRequestExpired(requestId, alice, bob);
+        vm.prank(bob);
+        platformA.expireRequest(requestId);
+
+        PlatformRandomness.Request memory expired = platformA.getRequest(requestId);
+        assertTrue(expired.expired);
+        assertFalse(expired.finalized);
+        assertEq(expired.finalizer, address(0));
+        assertEq(expired.result, bytes32(0));
+        assertEq(platformA.pendingCount(), 0);
+        assertEq(alice.balance, aliceBalance);
+        assertEq(bob.balance, bobBalance);
+        assertEq(address(platformA).balance, platformBalance);
+
+        vm.prank(bob);
+        uint256 replacementId = platformA.requestRandomness{value: 1 ether}();
+        assertEq(replacementId, requestId + 1, "expiry restores only this platform's capacity");
+    }
+
+    function test_ExpirePermanentlyRejectsDuplicateExpirationAndFinalization() public {
+        (uint256 requestId, PlatformRandomness.Request memory request) = _requestForAlice(platformA, 1 ether);
+        vm.roll(request.firstTargetBlock + 8_192);
+
+        vm.prank(bob);
+        platformA.expireRequest(requestId);
+
+        vm.expectRevert(PlatformRandomness.AlreadyExpired.selector);
+        vm.prank(alice);
+        platformA.expireRequest(requestId);
+
+        vm.expectRevert(PlatformRandomness.RequestExpired.selector);
+        vm.prank(alice);
+        platformA.finalizeRandomness(requestId, hex"", hex"", hex"");
+
+        assertEq(platformA.pendingCount(), 0);
+    }
+
+    function test_ExpireCannotOverwriteFinalizationAtLastAuthenticatableBlock() public {
+        (uint256 requestId, PlatformRandomness.Request memory request) = _requestForAlice(platformA, 1 ether);
+        (bytes memory header1, bytes memory header2, bytes memory header3) = _headers(request);
+        uint256 lastFinalizableBlock = request.firstTargetBlock + 8_191;
+        vm.roll(lastFinalizableBlock);
+        _mockHistory(request.firstTargetBlock, keccak256(header1));
+        _mockHistory(request.secondTargetBlock, keccak256(header2));
+        _mockHistory(request.thirdTargetBlock, keccak256(header3));
+
+        vm.prank(bob);
+        bytes32 result = platformA.finalizeRandomness(requestId, header1, header2, header3);
+
+        vm.expectRevert(PlatformRandomness.AlreadyFinalized.selector);
+        vm.prank(alice);
+        platformA.expireRequest(requestId);
+
+        PlatformRandomness.Request memory finalized = platformA.getRequest(requestId);
+        assertTrue(finalized.finalized);
+        assertFalse(finalized.expired);
+        assertEq(finalized.result, result);
+        assertEq(platformA.pendingCount(), 0);
+    }
+
+    function test_ExpireOnOnePlatformDoesNotReleaseAnotherPlatformsPendingSlot() public {
+        vm.roll(REQUEST_BLOCK);
+        vm.prank(alice);
+        uint256 requestIdA = platformA.requestRandomness{value: 1 ether}();
+        vm.prank(alice);
+        uint256 requestIdB = platformB.requestRandomness();
+
+        PlatformRandomness.Request memory requestA = platformA.getRequest(requestIdA);
+        vm.roll(requestA.firstTargetBlock + 8_192);
+        vm.prank(bob);
+        platformA.expireRequest(requestIdA);
+
+        assertEq(platformA.pendingCount(), 0);
+        assertEq(platformB.pendingCount(), 1);
+        assertTrue(platformA.getRequest(requestIdA).expired);
+        assertFalse(platformB.getRequest(requestIdB).expired);
+    }
+
+    function test_FinalizeRejectsAfterLastAuthenticatableBlockEvenWithMockedHistory() public {
+        (uint256 requestId, PlatformRandomness.Request memory request) = _requestForAlice(platformA, 1 ether);
+        (bytes memory header1, bytes memory header2, bytes memory header3) = _headers(request);
+        uint256 lastFinalizableBlock = request.firstTargetBlock + 8_191;
+        vm.roll(lastFinalizableBlock + 1);
+        _mockHistory(request.firstTargetBlock, keccak256(header1));
+        _mockHistory(request.secondTargetBlock, keccak256(header2));
+        _mockHistory(request.thirdTargetBlock, keccak256(header3));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PlatformRandomness.RequestProofExpired.selector, lastFinalizableBlock + 1, lastFinalizableBlock
+            )
+        );
+        vm.prank(bob);
+        platformA.finalizeRandomness(requestId, header1, header2, header3);
+
+        assertEq(platformA.pendingCount(), 1);
+        assertFalse(platformA.getRequest(requestId).finalized);
+        assertFalse(platformA.getRequest(requestId).expired);
+    }
+
     function test_FinalizeRejectsUnknownRequest() public {
         vm.expectRevert(PlatformRandomness.RequestNotFound.selector);
         platformA.finalizeRandomness(999, hex"", hex"", hex"");
 
         vm.expectRevert(PlatformRandomness.RequestNotFound.selector);
         platformA.draw(999, 100);
+
+        vm.expectRevert(PlatformRandomness.RequestNotFound.selector);
+        platformA.expireRequest(999);
     }
 
     function _requestForAlice(PlatformRandomness target, uint256 value)
