@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const developmentPreviewMeta =
   /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
 const templateRoot = new URL("../", import.meta.url);
-const previewRoot = new URL("../app/_sites-preview/", import.meta.url);
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -28,60 +27,148 @@ async function render() {
   );
 }
 
-test("server-renders the starter loading skeleton", async () => {
+test("server-renders the complete Monad RND public-good landing page", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, developmentPreviewMeta);
-  assert.match(html, /<title>Your site is taking shape<\/title>/i);
-  assert.match(html, /Codex is working/);
-  assert.match(html, /Your site is taking shape/);
-  assert.match(html, /Codex is building the first version/);
-  assert.match(html, /react-loading-skeleton/);
-  assert.match(html, /role="status"/);
+  assert.match(html, /<title>Monad RND · Public randomness for Monad<\/title>/i);
+  assert.match(html, /Monad RND/);
+  assert.match(html, /Connect wallet/);
+  assert.match(html, /Tx1 · Lock request/);
+  assert.match(html, /Tx2 · Store result/);
+  assert.match(html, /Result explorer/);
+  assert.match(html, /Protocol fee · 0/);
+  assert.match(
+    html,
+    /Authenticated multi-block proposer entropy, not a cryptographic VRF\./,
+  );
+  assert.match(html, /Every caller pays their own Monad gas\./);
+  assert.match(html, /Each platform sets its own request price, including zero\./);
+  assert.match(
+    html,
+    /No project treasury, relayer, keeper reward, or gas subsidy\./,
+  );
+  assert.match(html, /\+8 · \+24 · \+40/);
+  assert.match(html, /T\+64/);
+  assert.match(html, /\+8,191/);
+  assert.match(html, /Requester/);
+  assert.match(html, /Finalizer/);
+  assert.match(html, /1–100 draw/);
+
+  assert.doesNotMatch(html, developmentPreviewMeta);
+  assert.doesNotMatch(html, /Your site is taking shape|Codex is working/i);
+  assert.doesNotMatch(html, /react-loading-skeleton/);
 });
 
-test("keeps the loading skeleton scoped and disposable", async () => {
-  const [preview, css, page, layout, packageJson, files] = await Promise.all([
-    readFile(new URL("SkeletonPreview.tsx", previewRoot), "utf8"),
-    readFile(new URL("preview.css", previewRoot), "utf8"),
+test("ships real wallet flows and removes the disposable starter preview", async () => {
+  const [page, layout, demo, css, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/RandomnessDemo.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readdir(previewRoot),
   ]);
 
-  assert.deepEqual(files.sort(), ["SkeletonPreview.tsx", "preview.css"]);
-  assert.match(preview, /from "react-loading-skeleton"/);
-  assert.match(preview, /baseColor="#eceae7"/);
-  assert.match(preview, /highlightColor="#f9f8f6"/);
-  assert.match(preview, /duration=\{2\.8\}/);
-  assert.match(preview, /sites-skeleton-search-placeholder/);
-  assert.match(packageJson, /"react-loading-skeleton": "3\.5\.0"/);
+  await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
+  assert.doesNotMatch(packageJson, /react-loading-skeleton/);
+  assert.match(page, /<RandomnessDemo \/>/);
+  assert.match(layout, /Monad RND · Public randomness for Monad/);
+  assert.doesNotMatch(page + layout, /codex-preview|SkeletonPreview|Starter Project/);
 
-  const shellIndex = preview.indexOf('className="sites-skeleton-shell"');
-  const statusIndex = preview.indexOf('className="sites-skeleton-status"');
-  assert.ok(shellIndex >= 0 && statusIndex > shellIndex);
-  assert.match(css, /position:\s*fixed/);
-  assert.match(css, /inset:\s*0/);
-  assert.match(css, /opacity:\s*0\.52/);
+  for (const operation of [
+    "connectMonadWallet",
+    "createMonadPublicClient",
+    "createMonadWalletClient",
+    "deployDemoPlatform",
+    "requestRandomnessTx",
+    "fetchRawHeaders",
+    "finalizeRandomnessTx",
+    "expireRandomnessRequest",
+    "readRandomnessResult",
+    "rememberDemoContract",
+    "rememberRequest",
+  ]) {
+    assert.match(demo, new RegExp(`\\b${operation}\\b`));
+  }
+
+  for (const state of [
+    "disconnected",
+    "wrong-network",
+    "ready",
+    "deploying",
+    "requesting",
+    "waiting",
+    "finalizing",
+    "rescue-ready",
+    "proof-expired",
+    "expiring",
+    "expired",
+    "finalized",
+    "error",
+  ]) {
+    assert.match(demo, new RegExp(`["']${state}["']`));
+  }
+
+  assert.match(demo, /getBlockNumber/);
+  assert.match(demo, /setInterval/);
+  assert.match(demo, /navigator\.clipboard/);
+  assert.match(demo, /idPrefix:\s*string/);
+  assert.match(demo, /idPrefix="active"/);
+  assert.match(demo, /idPrefix="explorer"/);
+  assert.match(css, /:focus-visible/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.doesNotMatch(css, /#020617|canvas|pets|progress/i);
-  assert.doesNotMatch(
-    preview,
-    /loading-spinner|status-mark|status-progress|canvas|cookie|random/i,
+});
+
+test("promotes a wallet-free lookup into the resumable Tx2 workspace", async () => {
+  const demo = await readFile(
+    new URL("../app/components/RandomnessDemo.tsx", import.meta.url),
+    "utf8",
   );
 
-  assert.match(page, /export const metadata:\s*Metadata/);
-  assert.match(page, /"codex-preview": "development"/);
-  assert.match(page, /<SkeletonPreview \/>/);
-  assert.match(layout, /title:\s*"Starter Project"/);
-  assert.doesNotMatch(layout, /codex-preview|_sites-preview|themeColor|\bViewport\b/);
-  assert.doesNotMatch(css, /(^|\s)(html|body)\s*\{/m);
+  assert.match(demo, /function handleLoadIntoWorkspace/);
+  assert.match(demo, /Load into Tx2 workspace/);
+  assert.match(demo, /setActiveContract\(explorerResult\.contractAddress\)/);
+  assert.match(demo, /setRequestId\(explorerResult\.requestId\)/);
+  assert.match(demo, /setRequest\(explorerResult\.request\)/);
+  assert.match(demo, /explorerReference\?\.tx1Hash/);
+  assert.match(demo, /calculateReadiness/);
+});
 
-  await assert.rejects(
-    access(new URL("public/_sites-preview", templateRoot)),
+test("prefills the wallet-free explorer with the newest locally saved Monad request", async () => {
+  const demo = await readFile(
+    new URL("../app/components/RandomnessDemo.tsx", import.meta.url),
+    "utf8",
   );
+
+  assert.match(
+    demo,
+    /const newestMonadRequest = stored\.recentRequests\.find\(/,
+  );
+  assert.match(
+    demo,
+    /setExplorerContract\(newestMonadRequest\.contractAddress\)/,
+  );
+  assert.match(
+    demo,
+    /setExplorerRequestId\(newestMonadRequest\.requestId\)/,
+  );
+  assert.match(demo, /Latest saved Monad request/);
+  assert.match(demo, /Read on-chain to verify its current status/);
+});
+
+test("publishes product metadata and a dedicated Monad RND favicon", async () => {
+  const [favicon, layout] = await Promise.all([
+    readFile(new URL("../public/favicon.svg", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(layout, /lang="en"/);
+  assert.match(layout, /Public randomness infrastructure with zero protocol fees/);
+  assert.match(favicon, /aria-label="Monad RND"/);
+  assert.match(favicon, /#836EF9/i);
+  assert.match(favicon, /#C8FF65/i);
+  assert.doesNotMatch(favicon, /#68C4FF|#0C79D8|#2E9EFF/i);
+  await assert.rejects(access(new URL("public/_sites-preview", templateRoot)));
 });

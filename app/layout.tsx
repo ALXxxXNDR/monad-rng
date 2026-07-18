@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,8 +14,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Starter Project",
-  description: "A clean starting point for building your site.",
+  title: "Monad RND · Public randomness for Monad",
+  description:
+    "Public randomness infrastructure with zero protocol fees: deploy an isolated Monad instance, lock Tx1, authenticate three headers, and store Tx2 forever.",
+  applicationName: "Monad RND",
+  keywords: [
+    "Monad",
+    "randomness",
+    "block entropy",
+    "smart contract",
+    "public good",
+  ],
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
@@ -28,9 +38,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
         {children}
       </body>
     </html>
