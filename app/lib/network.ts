@@ -53,6 +53,8 @@ export type RandomnessErrorCode =
   | "INVALID_DRAW"
   | "INVALID_TARGETS"
   | "EXPIRY_NOT_READY"
+  | "GAS_ESTIMATION_FAILED"
+  | "GAS_LIMIT_EXCEEDED"
   | "TRANSACTION_REVERTED"
   | "UNKNOWN";
 
@@ -87,30 +89,55 @@ const ERROR_MESSAGES: Record<RandomnessErrorCode, string> = {
   INVALID_DRAW: "컨트랙트가 올바르지 않은 추첨 값을 반환했어요.",
   INVALID_TARGETS: "난수 확정에는 정확히 세 개의 대상 블록이 필요해요.",
   EXPIRY_NOT_READY: "아직 이 요청을 만료 처리할 수 없어요.",
+  GAS_ESTIMATION_FAILED: "안전한 가스 한도를 계산하지 못해 거래를 열지 않았어요.",
+  GAS_LIMIT_EXCEEDED: "예상 가스가 이 작업의 안전 한도를 초과했어요.",
   TRANSACTION_REVERTED: "거래가 체인에서 실패했어요.",
   UNKNOWN: "요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
 };
 
 function errorCandidates(error: unknown): unknown[] {
   const candidates: unknown[] = [];
-  let current = error;
+  const queue = [error];
+  const visited = new Set<object>();
 
-  for (let depth = 0; depth < 6 && current; depth += 1) {
+  while (queue.length > 0 && candidates.length < 24) {
+    const current = queue.shift();
+    if (current === undefined || current === null) continue;
+    if (typeof current === "object") {
+      if (visited.has(current)) continue;
+      visited.add(current);
+    }
     candidates.push(current);
-    if (typeof current !== "object" || !("cause" in current)) break;
-    current = (current as { cause?: unknown }).cause;
+
+    if (typeof current === "object") {
+      const record = current as Record<string, unknown>;
+      if (record.cause !== undefined) queue.push(record.cause);
+      if (record.data !== undefined) queue.push(record.data);
+    }
   }
 
   return candidates;
 }
 
-function propertyFromError(error: unknown, property: "code" | "errorName"): unknown {
+function propertiesFromError(
+  error: unknown,
+  property: "code" | "errorName" | "name",
+): unknown[] {
+  const values: unknown[] = [];
   for (const candidate of errorCandidates(error)) {
     if (typeof candidate === "object" && candidate && property in candidate) {
-      return (candidate as Record<string, unknown>)[property];
+      values.push((candidate as Record<string, unknown>)[property]);
     }
   }
-  return undefined;
+  return values;
+}
+
+function hasErrorProperty(
+  error: unknown,
+  property: "code" | "errorName" | "name",
+  value: unknown,
+): boolean {
+  return propertiesFromError(error, property).includes(value);
 }
 
 function errorText(error: unknown): string {
@@ -135,11 +162,16 @@ export function mapClientError(error: unknown): {
     return { code: error.code, message: error.message };
   }
 
-  const code = propertyFromError(error, "code");
-  const errorName = String(propertyFromError(error, "errorName") ?? "");
   const text = errorText(error);
 
-  if (code === 4001 || code === "ACTION_REJECTED" || text.includes("user rejected")) {
+  if (hasErrorProperty(error, "name", "ChainMismatchError")) {
+    return { code: "WRONG_NETWORK", message: ERROR_MESSAGES.WRONG_NETWORK };
+  }
+  if (
+    hasErrorProperty(error, "code", 4001) ||
+    hasErrorProperty(error, "code", "ACTION_REJECTED") ||
+    text.includes("user rejected")
+  ) {
     return { code: "WALLET_REJECTED", message: ERROR_MESSAGES.WALLET_REJECTED };
   }
   if (
@@ -149,22 +181,13 @@ export function mapClientError(error: unknown): {
   ) {
     return { code: "MISSING_MON", message: ERROR_MESSAGES.MISSING_MON };
   }
-  if (
-    code === -32601 ||
-    text.includes("debug_getrawheader") ||
-    text.includes("method not found")
-  ) {
-    return {
-      code: "RAW_HEADER_UNAVAILABLE",
-      message: ERROR_MESSAGES.RAW_HEADER_UNAVAILABLE,
-    };
-  }
-  if (errorName === "RequestProofExpired" || errorName === "RequestExpired") {
+  if (hasErrorProperty(error, "errorName", "RequestProofExpired")) {
     return { code: "PROOF_EXPIRED", message: ERROR_MESSAGES.PROOF_EXPIRED };
   }
   if (
-    errorName === "AlreadyFinalized" ||
-    errorName === "AlreadyExpired" ||
+    hasErrorProperty(error, "errorName", "AlreadyFinalized") ||
+    hasErrorProperty(error, "errorName", "AlreadyExpired") ||
+    hasErrorProperty(error, "errorName", "RequestExpired") ||
     text.includes("already finalized") ||
     text.includes("already expired")
   ) {
@@ -206,7 +229,7 @@ export async function ensureMonadTestnet(provider: InjectedWalletProvider): Prom
         params: [{ chainId: MONAD_TESTNET_CHAIN_HEX }],
       });
     } catch (error) {
-      if (propertyFromError(error, "code") !== 4902) {
+      if (!hasErrorProperty(error, "code", 4902)) {
         throw asRandomnessClientError(error, "WRONG_NETWORK");
       }
 
@@ -222,6 +245,15 @@ export async function ensureMonadTestnet(provider: InjectedWalletProvider): Prom
           },
         ],
       });
+      await provider.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: MONAD_TESTNET_CHAIN_HEX }],
+      });
+    }
+
+    const verifiedChain = await provider.request({ method: "eth_chainId" });
+    if (String(verifiedChain).toLowerCase() !== MONAD_TESTNET_CHAIN_HEX) {
+      throw new RandomnessClientError("WRONG_NETWORK", ERROR_MESSAGES.WRONG_NETWORK);
     }
   } catch (error) {
     throw asRandomnessClientError(error, "WRONG_NETWORK");

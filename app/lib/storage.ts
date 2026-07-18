@@ -153,17 +153,35 @@ function sanitizeState(value: unknown): StoredLocalState {
 export function loadStoredState(storage: StorageLike | undefined = browserStorage()): StoredLocalState {
   if (!storage) return { ...EMPTY_STATE };
 
+  let serialized: string | null;
   try {
-    const serialized = storage.getItem(LOCAL_STATE_KEY);
-    if (!serialized) return { ...EMPTY_STATE };
-    return sanitizeState(JSON.parse(serialized));
+    serialized = storage.getItem(LOCAL_STATE_KEY);
   } catch {
     return { ...EMPTY_STATE };
   }
+  if (!serialized) return { ...EMPTY_STATE };
+
+  let state: StoredLocalState;
+  try {
+    state = sanitizeState(JSON.parse(serialized));
+  } catch {
+    state = { ...EMPTY_STATE };
+  }
+
+  try {
+    storage.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Private browsing and storage policy failures must not break the dapp.
+  }
+  return state;
 }
 
 function persistState(storage: StorageLike | undefined, state: StoredLocalState): StoredLocalState {
-  if (storage) storage.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
+  try {
+    storage?.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // The on-chain state stays authoritative when local persistence is unavailable.
+  }
   return state;
 }
 
@@ -200,12 +218,16 @@ export function rememberRequest(
   const current = loadStoredState(storage);
   if (!request) return current;
   const key = `${request.chainId}:${request.contractAddress}:${request.requestId}`;
+  const existing = current.recentRequests.find(
+    (item) => `${item.chainId}:${item.contractAddress}:${item.requestId}` === key,
+  );
+  const merged = existing ? { ...existing, ...request } : request;
 
   return persistState(storage, {
     version: 1,
     demoContracts: current.demoContracts,
     recentRequests: deduplicateRequests([
-      request,
+      merged,
       ...current.recentRequests.filter(
         (item) => `${item.chainId}:${item.contractAddress}:${item.requestId}` !== key,
       ),

@@ -1,4 +1,10 @@
-import { getAddress, isHex, numberToHex, parseEventLogs } from "viem";
+import {
+  encodeDeployData,
+  getAddress,
+  isHex,
+  numberToHex,
+  parseEventLogs,
+} from "viem";
 import type { Abi, Address, Hash, Hex, Log } from "viem";
 
 import {
@@ -16,6 +22,7 @@ import type {
 export const PLATFORM_ARTIFACT_URL = "/contracts/PlatformRandomness.json";
 export const DEFAULT_DEMO_MAX_PENDING = BigInt(128);
 export const DEMO_MAX_PENDING_LIMIT = BigInt(256);
+export const TRANSACTION_CONFIRMATIONS = 3;
 
 export interface PlatformArtifact {
   abi: Abi;
@@ -69,6 +76,13 @@ const ZERO_RESULT = `0x${"00".repeat(32)}` as Hex;
 const BIGINT_ZERO = BigInt(0);
 const BIGINT_ONE = BigInt(1);
 const DRAW_UPPER_BOUND = BigInt(100);
+const GAS_MARGIN_NUMERATOR = BigInt(120);
+const GAS_MARGIN_DENOMINATOR = BigInt(100);
+const DEPLOY_GAS_CAP = BigInt(6_000_000);
+const TX1_GAS_CAP = BigInt(300_000);
+const TX2_GAS_CAP = BigInt(1_000_000);
+const EXPIRY_GAS_CAP = BigInt(150_000);
+const MAX_RAW_HEADER_BYTES = 4_096;
 
 function fail(
   code: RandomnessErrorCode,
@@ -137,6 +151,32 @@ function requireSuccessfulReceipt(receipt: { status?: string }): void {
   }
 }
 
+async function gasWithSafetyMargin(
+  estimate: () => Promise<bigint>,
+  hardCap: bigint,
+): Promise<bigint> {
+  let estimated: bigint;
+  try {
+    estimated = await estimate();
+  } catch (error) {
+    throw asRandomnessClientError(error, "GAS_ESTIMATION_FAILED");
+  }
+  if (estimated <= BIGINT_ZERO) {
+    throw fail(
+      "GAS_ESTIMATION_FAILED",
+      "안전한 가스 한도를 계산하지 못해 거래를 열지 않았어요.",
+    );
+  }
+
+  const padded =
+    (estimated * GAS_MARGIN_NUMERATOR + GAS_MARGIN_DENOMINATOR - BIGINT_ONE) /
+    GAS_MARGIN_DENOMINATOR;
+  if (padded > hardCap) {
+    throw fail("GAS_LIMIT_EXCEEDED", "예상 가스가 이 작업의 안전 한도를 초과했어요.");
+  }
+  return padded;
+}
+
 export async function assertCompatibleContract(
   publicClient: MonadPublicClient,
   contractAddress: string,
@@ -175,20 +215,42 @@ export async function deployDemoPlatform({
 
   try {
     const published = await resolvedArtifact(artifact, fetchImpl);
+    const account = getAddress(owner);
+    const constructorArgs = [
+      account,
+      platformName.trim() || "Monad RND personal demo",
+      BIGINT_ZERO,
+      maxPending,
+    ] as const;
+    const deployData = encodeDeployData({
+      abi: published.abi,
+      bytecode: published.bytecode,
+      args: constructorArgs,
+    });
+    const gas = await gasWithSafetyMargin(
+      () =>
+        publicClient.estimateGas({
+          account,
+          data: deployData,
+          value: BIGINT_ZERO,
+        }),
+      DEPLOY_GAS_CAP,
+    );
     const deployContract = walletClient.deployContract as unknown as (
       args: Record<string, unknown>,
     ) => Promise<Hash>;
     const transactionHash = await deployContract({
+      account,
       abi: published.abi,
       bytecode: published.bytecode,
-      args: [
-        getAddress(owner),
-        platformName.trim() || "Monad RND personal demo",
-        BIGINT_ZERO,
-        maxPending,
-      ],
+      args: constructorArgs,
+      gas,
+      value: BIGINT_ZERO,
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: transactionHash });
+    const receipt = await publicClient.waitForTransactionReceipt({
+      hash: transactionHash,
+      confirmations: TRANSACTION_CONFIRMATIONS,
+    });
     requireSuccessfulReceipt(receipt);
     if (!receipt.contractAddress) {
       throw new Error("Deployment receipt omitted contract address");
@@ -301,12 +363,14 @@ function decodedRequestEvent(
 export async function requestRandomnessTx({
   publicClient,
   walletClient,
+  account,
   contractAddress,
   artifact,
   fetchImpl,
 }: {
   publicClient: MonadPublicClient;
   walletClient: MonadWalletClient;
+  account: Address;
   contractAddress: string;
   artifact?: PlatformArtifact;
   fetchImpl?: FetchLike;
@@ -321,22 +385,39 @@ export async function requestRandomnessTx({
   try {
     const published = await resolvedArtifact(artifact, fetchImpl);
     const address = await assertCompatibleContract(publicClient, contractAddress);
+    const signer = getAddress(account);
     const requestPrice = (await publicClient.readContract({
       address,
       abi: published.abi,
       functionName: "requestPrice",
+      blockTag: "latest",
     })) as bigint;
-    const writeContract = walletClient.writeContract as unknown as (
+    const estimateContractGas = publicClient.estimateContractGas as unknown as (
       args: Record<string, unknown>,
-    ) => Promise<Hash>;
-    const transactionHash = await writeContract({
+    ) => Promise<bigint>;
+    const transaction = {
+      account: signer,
       address,
       abi: published.abi,
       functionName: "requestRandomness",
       args: [],
       value: requestPrice,
+    };
+    const gas = await gasWithSafetyMargin(
+      () => estimateContractGas(transaction),
+      TX1_GAS_CAP,
+    );
+    const writeContract = walletClient.writeContract as unknown as (
+      args: Record<string, unknown>,
+    ) => Promise<Hash>;
+    const transactionHash = await writeContract({
+      ...transaction,
+      gas,
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: transactionHash });
+    const receipt = await publicClient.waitForTransactionReceipt({
+      hash: transactionHash,
+      confirmations: TRANSACTION_CONFIRMATIONS,
+    });
     requireSuccessfulReceipt(receipt);
     const requested = decodedRequestEvent(
       published.abi,
@@ -393,7 +474,11 @@ export async function fetchRawHeaders(
           rpcError.code = payload.error?.code;
           throw rpcError;
         }
-        if (!/^0x[0-9a-fA-F]+$/.test(payload.result)) {
+        const encodedLength = payload.result.length - 2;
+        if (
+          !/^0x(?:[0-9a-fA-F]{2})+$/.test(payload.result) ||
+          encodedLength / 2 > MAX_RAW_HEADER_BYTES
+        ) {
           throw new Error("RPC returned a malformed raw header");
         }
         return payload.result as Hex;
@@ -494,12 +579,14 @@ async function readRequestWithArtifact(
   address: Address,
   requestId: bigint,
   artifact: PlatformArtifact,
+  blockTag: "latest" | "finalized" = "finalized",
 ): Promise<RandomnessRequest> {
   const value = await publicClient.readContract({
     address,
     abi: artifact.abi,
     functionName: "getRequest",
     args: [requestId],
+    blockTag,
   });
   return normalizeRequest(value);
 }
@@ -542,6 +629,7 @@ export async function readRandomnessResult({
       abi: published.abi,
       functionName: "draw",
       args: [requestId, DRAW_UPPER_BOUND],
+      blockTag: "finalized",
     })) as bigint;
     return {
       contractAddress: address,
@@ -558,6 +646,7 @@ export async function readRandomnessResult({
 export async function finalizeRandomnessTx({
   publicClient,
   walletClient,
+  account,
   contractAddress,
   requestId,
   headers,
@@ -566,6 +655,7 @@ export async function finalizeRandomnessTx({
 }: {
   publicClient: MonadPublicClient;
   walletClient: MonadWalletClient;
+  account: Address;
   contractAddress: string;
   requestId: bigint;
   headers: readonly [Hex, Hex, Hex];
@@ -583,16 +673,33 @@ export async function finalizeRandomnessTx({
     }
     const published = await resolvedArtifact(artifact, fetchImpl);
     const address = await assertCompatibleContract(publicClient, contractAddress);
-    const writeContract = walletClient.writeContract as unknown as (
+    const signer = getAddress(account);
+    const estimateContractGas = publicClient.estimateContractGas as unknown as (
       args: Record<string, unknown>,
-    ) => Promise<Hash>;
-    const transactionHash = await writeContract({
+    ) => Promise<bigint>;
+    const transaction = {
+      account: signer,
       address,
       abi: published.abi,
       functionName: "finalizeRandomness",
       args: [requestId, headers[0], headers[1], headers[2]],
+      value: BIGINT_ZERO,
+    };
+    const gas = await gasWithSafetyMargin(
+      () => estimateContractGas(transaction),
+      TX2_GAS_CAP,
+    );
+    const writeContract = walletClient.writeContract as unknown as (
+      args: Record<string, unknown>,
+    ) => Promise<Hash>;
+    const transactionHash = await writeContract({
+      ...transaction,
+      gas,
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: transactionHash });
+    const receipt = await publicClient.waitForTransactionReceipt({
+      hash: transactionHash,
+      confirmations: TRANSACTION_CONFIRMATIONS,
+    });
     requireSuccessfulReceipt(receipt);
     const permanent = await readRandomnessResult({
       publicClient,
@@ -621,6 +728,7 @@ export async function finalizeRandomnessTx({
 export async function expireRandomnessRequest({
   publicClient,
   walletClient,
+  account,
   contractAddress,
   requestId,
   artifact,
@@ -628,6 +736,7 @@ export async function expireRandomnessRequest({
 }: {
   publicClient: MonadPublicClient;
   walletClient: MonadWalletClient;
+  account: Address;
   contractAddress: string;
   requestId: bigint;
   artifact?: PlatformArtifact;
@@ -637,23 +746,43 @@ export async function expireRandomnessRequest({
     const published = await resolvedArtifact(artifact, fetchImpl);
     const address = await assertCompatibleContract(publicClient, contractAddress);
     const [request, currentBlock] = await Promise.all([
-      readRequestWithArtifact(publicClient, address, requestId, published),
+      readRequestWithArtifact(publicClient, address, requestId, published, "latest"),
       publicClient.getBlockNumber(),
     ]);
+    if (request.finalized || request.expired) {
+      throw fail("DUPLICATE_STATE", "이미 확정되거나 만료된 요청이에요.");
+    }
     const readiness = calculateReadiness(request, currentBlock);
     if (!readiness.canExpire) {
       throw fail("EXPIRY_NOT_READY", "아직 이 요청을 만료 처리할 수 없어요.");
     }
-    const writeContract = walletClient.writeContract as unknown as (
+    const signer = getAddress(account);
+    const estimateContractGas = publicClient.estimateContractGas as unknown as (
       args: Record<string, unknown>,
-    ) => Promise<Hash>;
-    const transactionHash = await writeContract({
+    ) => Promise<bigint>;
+    const transaction = {
+      account: signer,
       address,
       abi: published.abi,
       functionName: "expireRequest",
       args: [requestId],
+      value: BIGINT_ZERO,
+    };
+    const gas = await gasWithSafetyMargin(
+      () => estimateContractGas(transaction),
+      EXPIRY_GAS_CAP,
+    );
+    const writeContract = walletClient.writeContract as unknown as (
+      args: Record<string, unknown>,
+    ) => Promise<Hash>;
+    const transactionHash = await writeContract({
+      ...transaction,
+      gas,
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: transactionHash });
+    const receipt = await publicClient.waitForTransactionReceipt({
+      hash: transactionHash,
+      confirmations: TRANSACTION_CONFIRMATIONS,
+    });
     requireSuccessfulReceipt(receipt);
     return { transactionHash };
   } catch (error) {
