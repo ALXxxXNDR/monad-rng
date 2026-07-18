@@ -2,6 +2,9 @@
   "name": "site-creator-vinext-starter",
   "version": "0.1.0",
   "private": true,
+  "imports": {
+    "#monad-network": "./app/lib/network.ts"
+  },
   "engines": {
     "node": ">=22.13.0"
   },
@@ -19,7 +22,8 @@
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "react-loading-skeleton": "3.5.0"
+    "react-loading-skeleton": "3.5.0",
+    "viem": "^2.55.2"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
