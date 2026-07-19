@@ -2,8 +2,7 @@
 
 ## Operating promise
 
-> Tx1 locks the request; Tx2 finalizes and permanently stores the result. The
-> service operates both as one monitored product flow.
+> Tx1 locks the request; Tx2 finalizes and permanently stores the random result. A production integration must operate both as one flow.
 
 Monitor every `RandomnessRequested` until exactly one terminal contract event:
 `RandomnessFinalized` or `RandomnessRequestExpired`. A submitted transaction,

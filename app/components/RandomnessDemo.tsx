@@ -2895,10 +2895,13 @@ export function RandomnessDemo() {
                   ) : null}
                   {readiness ? (
                     <small>
-                      The demo closes Tx2 64 blocks early for wallet approval and
-                      inclusion time. On-chain proof remains valid through exact block{" "}
-                      {formatBlock(readiness.lastProofValidBlock)}. T+64 opens rescue;
-                      it is not proof expiry.
+                      The demo&apos;s 64-block cutoff is a best-effort UI margin
+                      that prevents starting a new Tx2 flow after the observed
+                      head reaches it. Wallet or RPC delay can cross the margin,
+                      so it does not guarantee broadcast or inclusion. On-chain
+                      proof remains valid through exact block{" "}
+                      {formatBlock(readiness.lastProofValidBlock)}. T+64 opens
+                      rescue; it is not proof expiry.
                     </small>
                   ) : null}
                 </div>

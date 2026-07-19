@@ -13,6 +13,8 @@ const publishedGuideFiles = [
   "deployment-and-verification.md",
   "operations-runbook.md",
 ];
+const mandatoryFlowSentence =
+  "Tx1 locks the request; Tx2 finalizes and permanently stores the random result. A production integration must operate both as one flow.";
 
 test("publisher copies every onboarding guide byte for byte", async () => {
   const outputDirectory = await mkdtemp(
@@ -51,6 +53,26 @@ test("readiness guide makes Tx1 and Tx2 one mandatory product flow", async () =>
   assert.match(guide, /not automatic/i);
   assert.match(guide, /not a cryptographic VRF/i);
   assert.match(guide, /Go\/No-Go/i);
+});
+
+test("every canonical guide states the exact mandatory Tx1 and Tx2 flow", async () => {
+  await Promise.all(
+    publishedGuideFiles.map(async (file) => {
+      const guide = await read(`docs/${file}`);
+      assert.ok(
+        guide.includes(mandatoryFlowSentence),
+        `${file} must state the mandatory flow exactly`,
+      );
+    }),
+  );
+});
+
+test("readiness guide limits validation to Monad Testnet and requires a fresh mainnet review", async () => {
+  const guide = await read("docs/production-readiness.md");
+  assert.match(guide, /only Monad Testnet[^.\n]*chain ID[^.\n]*10143/i);
+  assert.match(guide, /mainnet[\s\S]{0,240}RPC[^.\n]*EIP-2935/i);
+  assert.match(guide, /mainnet[\s\S]{0,320}threat model/i);
+  assert.match(guide, /mainnet[\s\S]{0,400}independent security review/i);
 });
 
 test("integration guide covers direct and wrapper requester semantics", async () => {
@@ -103,4 +125,40 @@ test("operations guide has a non-automatic Tx2 and nonce recovery runbook", asyn
   assert.match(guide, /R\+8199/i);
   assert.match(guide, /R\+8200/i);
   assert.match(guide, /RPC failover/i);
+});
+
+test("README describes transaction-hash persistence as best effort after broadcast", async () => {
+  const readme = await read("README.md");
+  assert.match(readme, /attempts to save[\s\S]{0,160}best-effort/i);
+  assert.match(
+    readme,
+    /callback[\s\S]{0,120}localStorage[\s\S]{0,180}fail[\s\S]{0,120}broadcast/i,
+  );
+  assert.match(readme, /manual sender-and-nonce reconciliation/i);
+  assert.doesNotMatch(readme, /saves each deployment,[\s\S]{0,80}immediately/i);
+});
+
+test("README and demo describe the cutoff as a best-effort start gate", async () => {
+  const [readme, demo] = await Promise.all([
+    read("README.md"),
+    read("app/components/RandomnessDemo.tsx"),
+  ]);
+
+  for (const source of [readme, demo]) {
+    assert.match(source, /best-effort UI margin/i);
+    assert.match(source, /prevents starting a\s+new Tx2 flow/i);
+    assert.match(source, /does not\s+guarantee broadcast or inclusion/i);
+  }
+  assert.doesNotMatch(readme, /stops all Tx2 submissions/i);
+  assert.doesNotMatch(demo, /closes Tx2 64 blocks early/i);
+});
+
+test("README document map links the detailed contract reference", async () => {
+  const readme = await read("README.md");
+  assert.match(readme, /\(docs\/contract-integration\.md\)/);
+});
+
+test("the default Node test command includes onboarding regressions", async () => {
+  const packageJson = JSON.parse(await read("package.json"));
+  assert.match(packageJson.scripts.test, /tests\/onboarding-docs\.test\.mjs/);
 });

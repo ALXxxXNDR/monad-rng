@@ -24,6 +24,8 @@ Read the guides in role order:
    [`deployment-and-verification.md`](docs/deployment-and-verification.md)
 4. Operators and support teams:
    [`operations-runbook.md`](docs/operations-runbook.md)
+5. Detailed contract behavior and ABI reference:
+   [`contract-integration.md`](docs/contract-integration.md)
 
 ## What you should know first
 
@@ -59,10 +61,13 @@ Read the guides in role order:
 9. Read the permanent seed and the 1–100 draw from the contract.
 
 If the wallet has already returned a transaction hash but an RPC confirmation
-check fails, do **not** send the action again. The site saves each deployment,
-Tx1, Tx2, and expiry hash immediately and offers **Check submitted
-transaction**. Recovery reads the existing transaction; it does not send or
-charge for a new one.
+check fails, do **not** send the action again. The demo attempts to save each
+deployment, Tx1, Tx2, and expiry hash and offers **Check submitted
+transaction**. This is best-effort: the hash callback or `localStorage` write
+may fail after broadcast, so a returned hash might not survive a page reload.
+When a hash is available, recovery reads the existing transaction; it does not
+send or charge for a new one. Without a saved hash, complete manual
+sender-and-nonce reconciliation before deciding whether any retry is safe.
 
 The demo can follow a replacement only after the original transaction becomes
 queryable. Monad public RPC does not expose mempool transactions through
@@ -91,10 +96,12 @@ EIP-2935 keeps 8,191 historical block hashes. For this request layout:
 - expiration creates no random result, reward, or refund in this primitive.
 
 To leave time for header retrieval, wallet approval, and inclusion, the included
-browser demo stops all Tx2 submissions 64 blocks before the protocol limit
-(`R + 8,135`). The contract itself still accepts a valid Tx2 through
-`R + 8,199`; the site shows both numbers so the UI safety margin is never
-mistaken for an on-chain rule.
+browser demo uses `R + 8,135` as a best-effort UI margin. It prevents starting a
+new Tx2 flow once the observed head reaches that cutoff. Wallet approval, RPC
+work, and block production can continue afterward, so this margin does not
+guarantee broadcast or inclusion before any particular block. The contract
+itself still accepts a valid Tx2 through `R + 8,199`; the site shows both
+numbers so the UI margin is never mistaken for an on-chain rule.
 
 At 300 ms per block the proof window is roughly 41 minutes, but block numbers,
 not wall-clock time, control the contract.

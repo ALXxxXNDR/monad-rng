@@ -4,6 +4,11 @@
 
 > Tx1 locks the request; Tx2 finalizes and permanently stores the random result. A production integration must operate both as one flow.
 
+Only Monad Testnet, chain ID `10143`, has been validated for this release.
+Mainnet adoption is outside that baseline. Mainnet needs fresh RPC and EIP-2935
+verification, an updated threat model, and an independent security review
+appropriate to the value at risk.
+
 Tx1 locks the economic action and fixes three future target blocks.
 
 Tx2 authenticates those blocks, derives the seed, and stores it permanently.

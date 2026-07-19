@@ -1,5 +1,7 @@
 # Monad RND deployment and verification
 
+> Tx1 locks the request; Tx2 finalizes and permanently stores the random result. A production integration must operate both as one flow.
+
 ## Supported baseline
 
 This repository has been verified only against **Monad Testnet, chain ID

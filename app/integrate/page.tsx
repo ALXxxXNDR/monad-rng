@@ -371,6 +371,14 @@ export default function IntegratePage() {
             </span>
           </li>
           <li>
+            <strong>Only the Testnet baseline is validated</strong>
+            <span>
+              Only Monad Testnet chain 10143 has been validated for this release.
+              Mainnet needs fresh RPC and EIP-2935 verification, an updated threat
+              model, and an independent security review.
+            </span>
+          </li>
+          <li>
             <strong>Expiry is terminal</strong>
             <span>
               From R+8200 the request cannot produce randomness. Expiry creates no

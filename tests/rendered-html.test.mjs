@@ -167,11 +167,34 @@ test("server-renders the platform integration hub", async () => {
   assert.match(html, /RPC and replacement limits are operational risks/i);
   assert.match(html, /Monad public RPC hides pending mempool transactions/i);
   assert.match(html, /reference demo, not a production SDK/i);
+  assert.match(
+    html,
+    /Only Monad Testnet chain 10143 has been validated for this release/i,
+  );
+  assert.match(
+    html,
+    /Mainnet needs fresh RPC and EIP-2935 verification, an updated threat model, and an independent security review/i,
+  );
   assert.match(html, /Expiry is terminal/i);
   assert.match(
     html,
     /Expiry creates no result, protocol refund, keeper reward, or later retry right/i,
   );
+});
+
+test("build publishes every canonical onboarding guide byte for byte", async () => {
+  for (const guide of [
+    "production-readiness.md",
+    "integration-guide.md",
+    "deployment-and-verification.md",
+    "operations-runbook.md",
+  ]) {
+    const [canonical, built] = await Promise.all([
+      readFile(new URL(`../docs/${guide}`, import.meta.url)),
+      readFile(new URL(`../dist/client/docs/${guide}`, import.meta.url)),
+    ]);
+    assert.deepEqual(built, canonical, `${guide} must be present in the build`);
+  }
 });
 
 test("ships real wallet flows and removes the disposable starter preview", async () => {
