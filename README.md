@@ -18,16 +18,27 @@ does not need an application server.
 
 Read the guides in role order:
 
-1. Product leads and technical owners:
+1. Builders and reviewers using the live Testnet release:
+   [`testnet-deployment.md`](docs/testnet-deployment.md)
+2. Product leads and technical owners:
    [`production-readiness.md`](docs/production-readiness.md)
-2. Application and smart-contract engineers:
+3. Application and smart-contract engineers:
    [`integration-guide.md`](docs/integration-guide.md)
-3. Release and deployment engineers:
+4. Release and deployment engineers:
    [`deployment-and-verification.md`](docs/deployment-and-verification.md)
-4. Operators and support teams:
+5. Operators and support teams:
    [`operations-runbook.md`](docs/operations-runbook.md)
-5. Detailed contract behavior and ABI reference:
+6. Detailed contract behavior and ABI reference:
    [`contract-integration.md`](docs/contract-integration.md)
+
+The tested ownerless Monad Testnet V1 contracts are:
+
+- `PlatformRandomness`: `0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1`
+- `RandomnessFactory`: `0x75E6458DaA0c6152419e4617dcf4D459149C1530`
+
+Use the public Platform for a quick free Testnet flow, or use the Factory to
+deploy an isolated platform instance with permanently fixed settings. In both
+cases, Tx1 and Tx2 must be integrated as one complete flow.
 
 ## What you should know first
 

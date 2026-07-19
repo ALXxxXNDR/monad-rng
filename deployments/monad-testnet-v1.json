@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "network": {
+    "name": "Monad Testnet",
+    "chainId": 10143,
+    "explorer": "https://testnet.monadscan.com"
+  },
+  "release": {
+    "sourceCommit": "fbded3748faab32f2b667bc8969d6fd6f84b865b",
+    "compiler": "0.8.24+commit.e11b9ed9",
+    "optimizerEnabled": true,
+    "optimizerRuns": 200,
+    "foundry": "1.7.1-monad-v1.0.0",
+    "foundryCommit": "bb49277de2e0979b9d37dc0e5f7f18f24b0262b8"
+  },
+  "deployer": "0xE147A8c74c453227A5B84F18B512c31C20566090",
+  "factory": {
+    "address": "0x75E6458DaA0c6152419e4617dcf4D459149C1530",
+    "deploymentTransaction": "0x6e51d3cd5675c0e66933d787dd324cd1a6ce15fd60075fe29a79a1a77a616f2f",
+    "deploymentBlock": 46293494,
+    "runtimeBytecodeHash": "0xd2d713b68539ca6949eeb072b607a77f8733a228ffb4f6abaa9603624268e28e",
+    "version": 1,
+    "ownerless": true
+  },
+  "platform": {
+    "address": "0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1",
+    "deploymentTransaction": "0xb9e94f6691eed92065c73ca8f68a7c03f0f141d58ec1c939ab5e52596c3fe393",
+    "deploymentBlock": 46293497,
+    "runtimeBytecodeHash": "0xe5bcd1470da3355bd74a1288e28dc12ab12e6906eeb49d54c9373234ddb55a61",
+    "version": 1,
+    "configurationLocked": true,
+    "protocolFeeWei": "0",
+    "revenueRecipient": "0xE147A8c74c453227A5B84F18B512c31C20566090",
+    "platformName": "Monad RNG Public V1",
+    "requestPriceWei": "0",
+    "maxPending": "0",
+    "ownerless": true
+  },
+  "attestation": {
+    "mode": "two independent RPCs at one common finalized block",
+    "scope": "deployment receipts, runtime bytecode, Factory event, frozen configuration, versions, and ownerless ABI",
+    "commonFinalizedBlock": 46293609,
+    "commonFinalizedBlockHash": "0x3deb833eb9b1c26d0ce100abcbecb528a7674eaa19d0b3df90b380c032f90552",
+    "result": "passed",
+    "sourceVerification": "not claimed"
+  },
+  "canary": {
+    "requesterFinalization": {
+      "requestId": "2",
+      "tx1": "0xbe6df9de02d42f46cda314eb67fa73a74277fa231065f04cd48e34f7cb67147e",
+      "requestBlock": 46294448,
+      "tx2": "0x651afddb7dda1fa838d8b12d3c2ac2ed49e4048821d0e619277726a19be2850b",
+      "finalizationBlock": 46294508,
+      "result": "0xc4f62c4fb0d72706df8f351d11b443fbfe66dc6c43fbf36899ae1665457b3952",
+      "drawUpperBound": "100",
+      "draw": "94",
+      "finalizer": "0xE147A8c74c453227A5B84F18B512c31C20566090"
+    },
+    "permissionlessHistoricalRescue": {
+      "requestId": "1",
+      "tx1": "0x4043b3c318be4ec2d4414654545d9cdb4756add946927f28c1ecdc987d0840ba",
+      "requestBlock": 46294081,
+      "tx2": "0x51408023884e9f5206be41870ea5b57ae79867fe7424fb6f959c9a8da306ee31",
+      "finalizationBlock": 46294910,
+      "result": "0x63c6bbd1e46277fae83a82a659ccaae8a6f42339aa0154d0ab5e89546e2d3b47",
+      "drawUpperBound": "100",
+      "draw": "35",
+      "finalizer": "0x51159922DE896C03f40bD2f54f9AbA6c370C8a8a",
+      "allTargetHeadersOlderThan256BlocksAtTx2": true
+    },
+    "pendingCountAfterTests": "0",
+    "finalizedObservation": {
+      "mode": "two independent RPCs at one common finalized block after both Tx2 transactions",
+      "commonFinalizedBlock": 46296466,
+      "commonFinalizedBlockHash": "0x211f5557928b6454dad9ed706604286b786204563825b91ed6589cef523174a8",
+      "bothRequestsFinalized": true
+    }
+  }
+}

@@ -458,7 +458,7 @@ async function verifiedRoleCastEnvironment(state, role) {
     `cast must be the reviewed Monad build ${EXPECTED_CAST_VERSION} (${EXPECTED_CAST_COMMIT})`,
   );
   const result = await castResult(
-    ["wallet", "address", "--quiet"],
+    ["wallet", "address"],
     environment,
     `${role} keystore verification`,
   );

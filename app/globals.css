@@ -1553,6 +1553,77 @@ footer > span {
   font-size: 0.9em;
 }
 
+.integrate-deployment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 70px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--line);
+}
+
+.integrate-deployment-card {
+  display: grid;
+  min-width: 0;
+  padding: clamp(28px, 4vw, 44px);
+  background:
+    linear-gradient(145deg, rgb(131 110 249 / 0.08), transparent 48%),
+    rgb(17 15 25 / 0.97);
+}
+
+.integrate-deployment-card > span {
+  color: var(--amber);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.integrate-deployment-card h3 {
+  margin-top: 24px;
+  font-size: clamp(25px, 2.5vw, 36px);
+  font-weight: 570;
+  letter-spacing: -0.04em;
+}
+
+.integrate-deployment-card > code {
+  margin-top: 16px;
+  color: var(--purple-bright);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.integrate-deployment-card > p {
+  max-width: 590px;
+  margin-top: 24px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.integrate-deployment-card > a {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  align-self: end;
+  margin-top: 34px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--purple-bright);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+}
+
+.integrate-deployment-card > a:hover {
+  color: var(--paper);
+}
+
 .integrate-flow {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2046,6 +2117,7 @@ footer > span {
     grid-column: 1;
   }
 
+  .integrate-deployment-grid,
   .integrate-guide-grid,
   .integrate-comparison,
   .integrate-boundaries {
@@ -2404,6 +2476,7 @@ footer > span {
     margin-top: 20px;
   }
 
+  .integrate-deployment-grid,
   .integrate-guide-grid,
   .integrate-comparison,
   .integrate-table-wrap,

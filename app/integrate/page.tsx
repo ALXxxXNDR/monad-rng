@@ -4,6 +4,8 @@ import Link from "next/link";
 const INTEGRATE_TITLE = "Integrate Monad RNG · Platform onboarding";
 const INTEGRATE_DESCRIPTION =
   "Plan a production Monad RNG integration where Tx1 locks the request and Tx2 finalizes and permanently stores the result as one operated flow.";
+const TESTNET_PLATFORM = "0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1";
+const TESTNET_FACTORY = "0x75E6458DaA0c6152419e4617dcf4D459149C1530";
 
 export async function generateMetadata(
   _props: Record<string, never>,
@@ -159,6 +161,72 @@ export default function IntegratePage() {
             does not mean automatic.
           </p>
         </aside>
+      </section>
+
+      <section
+        className="integrate-section integrate-deployment-section"
+        aria-labelledby="deployment-title"
+      >
+        <div className="integrate-section-heading">
+          <p className="eyebrow">Live Testnet V1</p>
+          <h2 id="deployment-title">Start from the attested contracts.</h2>
+          <p>
+            Both contracts are live on Monad Testnet chain 10143, ownerless,
+            frozen, and tested through real Tx1 and Tx2 flows. The public
+            canary is free; the Factory creates a separately configured
+            instance for each platform.
+          </p>
+        </div>
+        <div className="integrate-deployment-grid">
+          <article className="integrate-deployment-card">
+            <span>Free public canary</span>
+            <h3>PlatformRandomness</h3>
+            <code>{TESTNET_PLATFORM}</code>
+            <p>
+              Use this address for the fastest Testnet experiment. Tx1 creates
+              one request; Tx2 authenticates the three future headers and
+              permanently stores its result.
+            </p>
+            <a
+              href={`https://testnet.monadscan.com/address/${TESTNET_PLATFORM}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View Platform on explorer <span aria-hidden="true">↗</span>
+            </a>
+          </article>
+          <article className="integrate-deployment-card">
+            <span>Isolated deployment path</span>
+            <h3>RandomnessFactory</h3>
+            <code>{TESTNET_FACTORY}</code>
+            <p>
+              Call <code>deployPlatform</code> with the recipient, name, price,
+              and pending limit that your platform wants to freeze forever.
+              The Factory retains no ownership.
+            </p>
+            <a
+              href={`https://testnet.monadscan.com/address/${TESTNET_FACTORY}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View Factory on explorer <span aria-hidden="true">↗</span>
+            </a>
+          </article>
+        </div>
+        <div className="integrate-actions">
+          <a
+            className="button button--primary"
+            href="/docs/testnet-deployment.md"
+          >
+            Open deployment evidence
+          </a>
+          <a
+            className="button button--secondary"
+            href="/deployments/monad-testnet-v1.json"
+          >
+            Open machine-readable manifest
+          </a>
+        </div>
       </section>
 
       <section

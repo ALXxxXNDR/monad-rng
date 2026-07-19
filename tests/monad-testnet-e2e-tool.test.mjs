@@ -207,6 +207,8 @@ test("every transaction path re-attests the live Testnet contract before signing
       actionPath.indexOf("reconcileScenario"),
   );
   assert.match(source, /"--nonce",\s*nonce\.toString\(\)/);
+  assert.match(source, /\["wallet", "address"\]/);
+  assert.doesNotMatch(source, /\["wallet", "address", "--quiet"\]/);
   assert.match(source, /1\.7\.1-monad-v1\.0\.0/);
   assert.match(source, /console\.error\(sanitizedErrorMessage\(error\)\)/);
 });
