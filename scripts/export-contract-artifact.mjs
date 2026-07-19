@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { keccak256 } from "viem";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactPath = path.join(
@@ -15,24 +16,36 @@ const sourceFiles = ["PlatformRandomness.sol", "MonadHeaderReader.sol"];
 
 const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
 const bytecode = artifact.bytecode?.object;
+const runtimeBytecode = artifact.deployedBytecode?.object;
 
 if (!Array.isArray(artifact.abi)) {
   throw new Error(`Forge artifact has no ABI: ${artifactPath}`);
 }
-if (typeof bytecode !== "string" || !/^0x[0-9a-fA-F]+$/.test(bytecode)) {
+if (typeof bytecode !== "string" || !/^0x(?:[0-9a-fA-F]{2})+$/.test(bytecode)) {
   throw new Error(`Forge artifact has invalid creation bytecode: ${artifactPath}`);
+}
+if (
+  typeof runtimeBytecode !== "string" ||
+  !/^0x(?:[0-9a-fA-F]{2})+$/.test(runtimeBytecode)
+) {
+  throw new Error(`Forge artifact has invalid deployed runtime bytecode: ${artifactPath}`);
 }
 if (Object.keys(artifact.bytecode?.linkReferences ?? {}).length !== 0) {
   throw new Error("PlatformRandomness creation bytecode has unresolved library links");
 }
+if (Object.keys(artifact.deployedBytecode?.linkReferences ?? {}).length !== 0) {
+  throw new Error("PlatformRandomness runtime bytecode has unresolved library links");
+}
 
 const browserArtifact = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   contractName: "PlatformRandomness",
   sourceName: "contracts/src/PlatformRandomness.sol",
   compilerVersion: artifact.metadata?.compiler?.version ?? "unknown",
   abi: artifact.abi,
   bytecode,
+  runtimeBytecode,
+  runtimeBytecodeHash: keccak256(runtimeBytecode),
   sourceFiles: sourceFiles.map((fileName) => `/contracts/${fileName}`),
 };
 
@@ -51,5 +64,5 @@ for (const fileName of sourceFiles) {
 }
 
 console.log(
-  `Exported PlatformRandomness ABI, ${bytecode.length / 2 - 1} bytes of creation bytecode, and ${sourceFiles.length} source files.`,
+  `Exported PlatformRandomness ABI, ${bytecode.length / 2 - 1} creation bytes, ${runtimeBytecode.length / 2 - 1} runtime bytes, and ${sourceFiles.length} source files.`,
 );

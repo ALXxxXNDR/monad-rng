@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { formatEther } from "viem";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatEther, getAddress } from "viem";
 import type { Address, Hash } from "viem";
 
 import {
@@ -12,6 +12,7 @@ import {
   connectMonadWallet,
   createMonadPublicClient,
   createMonadWalletClient,
+  ensureMonadTestnet,
   getInjectedProvider,
   mapClientError,
   transactionExplorerUrl,
@@ -25,6 +26,10 @@ import {
   fetchRawHeaders,
   finalizeRandomnessTx,
   readRandomnessResult,
+  recoverDemoDeployment,
+  recoverRandomnessExpiryTx,
+  recoverRandomnessFinalizationTx,
+  recoverRandomnessRequestTx,
   requestRandomnessTx,
 } from "../lib/randomness";
 import type {
@@ -32,12 +37,22 @@ import type {
   RequestReadiness,
 } from "../lib/randomness";
 import {
+  forgetPendingTransaction,
   loadStoredState,
+  readPendingTransactions,
   rememberDemoContract,
+  rememberPendingTransaction,
   rememberRequest,
+  runWithPendingWriteLock,
+  runWithStoredStateMutationLock,
+  subscribeToStoredState,
 } from "../lib/storage";
 import type {
+  LockManagerLike,
+  PendingWriteLockResult,
+  StorageEventTargetLike,
   StoredLocalState,
+  StoredPendingTransaction,
   StoredRequestReference,
 } from "../lib/storage";
 
@@ -50,25 +65,185 @@ type FlowState =
   | "waiting"
   | "finalizing"
   | "rescue-ready"
+  | "safety-cutoff"
+  | "submitted"
+  | "busy"
   | "proof-expired"
   | "expiring"
   | "expired"
   | "finalized"
   | "error";
 type ResultRead = Awaited<ReturnType<typeof readRandomnessResult>>;
+type WalletEventName = "accountsChanged" | "chainChanged" | "disconnect";
+type WalletEventListener = (...args: unknown[]) => void;
+type WalletEventProvider = InjectedWalletProvider & {
+  on?: (event: WalletEventName, listener: WalletEventListener) => void;
+  removeListener?: (
+    event: WalletEventName,
+    listener: WalletEventListener,
+  ) => void;
+};
+export interface WorkspaceOperationIdentity {
+  epoch: number;
+  contractAddress?: string;
+  requestId?: string;
+}
+export interface PendingActionIdentity {
+  kind: StoredPendingTransaction["kind"];
+  chainId: number;
+  contractAddress?: string;
+  requestId?: string;
+  requester?: string;
+}
+export interface VisibleTransactionHashes {
+  deploymentHash?: Hash;
+  tx1Hash?: Hash;
+  tx2Hash?: Hash;
+  expiryHash?: Hash;
+}
 
 const EMPTY_LOCAL_STATE: StoredLocalState = {
-  version: 1,
+  version: 2,
   demoContracts: [],
   recentRequests: [],
+  pendingTransactions: [],
 };
-const BUSY_STATES = new Set<FlowState>([
-  "deploying",
-  "requesting",
-  "finalizing",
-  "expiring",
-]);
 const BLOCK_TIME_ESTIMATE_SECONDS = 0.3;
+export const BROWSER_PROOF_INCLUSION_BUFFER_BLOCKS = BigInt(64);
+
+export function proofSafetyCutoffBlock(
+  lastProofValidBlock: bigint,
+): bigint {
+  return lastProofValidBlock > BROWSER_PROOF_INCLUSION_BUFFER_BLOCKS
+    ? lastProofValidBlock - BROWSER_PROOF_INCLUSION_BUFFER_BLOCKS
+    : BigInt(0);
+}
+
+export function isBrowserProofCutoff(
+  readiness: Pick<
+    RequestReadiness,
+    "phase" | "lastProofValidBlock" | "firstExpiryBlock"
+  >,
+  currentBlock: bigint | undefined,
+): boolean {
+  if (
+    currentBlock === undefined ||
+    readiness.phase === "finalized" ||
+    readiness.phase === "expired" ||
+    readiness.phase === "proof-expired" ||
+    currentBlock >= readiness.firstExpiryBlock
+  ) {
+    return false;
+  }
+  return currentBlock >= proofSafetyCutoffBlock(readiness.lastProofValidBlock);
+}
+
+export function preferredScrollBehavior(
+  prefersReducedMotion: boolean,
+): ScrollBehavior {
+  return prefersReducedMotion ? "auto" : "smooth";
+}
+
+export function workspaceOperationMatches(
+  captured: WorkspaceOperationIdentity,
+  current: WorkspaceOperationIdentity,
+): boolean {
+  return (
+    captured.epoch === current.epoch &&
+    captured.contractAddress === current.contractAddress &&
+    captured.requestId === current.requestId
+  );
+}
+
+export function recoveryWorkspaceMayApply(
+  capturedSelectionEpoch: number,
+  currentSelectionEpoch: number,
+  capturedWorkspace: WorkspaceOperationIdentity,
+  currentWorkspace: WorkspaceOperationIdentity,
+): boolean {
+  return (
+    capturedSelectionEpoch === currentSelectionEpoch &&
+    workspaceOperationMatches(capturedWorkspace, currentWorkspace)
+  );
+}
+
+export function pendingMatchesAction(
+  pending: StoredPendingTransaction,
+  action: PendingActionIdentity,
+): boolean {
+  if (pending.kind !== action.kind || pending.chainId !== action.chainId) {
+    return false;
+  }
+  if (pending.kind === "deployment") return true;
+  if (
+    !action.contractAddress ||
+    pending.contractAddress.toLowerCase() !==
+      action.contractAddress.toLowerCase()
+  ) {
+    return false;
+  }
+  if (pending.kind === "request") {
+    if (!pending.requester || !action.requester) return true;
+    return pending.requester.toLowerCase() === action.requester.toLowerCase();
+  }
+  return pending.requestId === action.requestId;
+}
+
+export function pendingFailureDisposition(
+  errorCode: string,
+): "forget" | "retain" {
+  return errorCode === "TRANSACTION_REVERTED" ||
+    errorCode === "TRANSACTION_REPLACED"
+    ? "forget"
+    : "retain";
+}
+
+export function visibleHashesAfterConfirmedRevert(
+  kind: StoredPendingTransaction["kind"],
+  visible: VisibleTransactionHashes,
+  saved: VisibleTransactionHashes,
+): VisibleTransactionHashes {
+  if (kind === "deployment") {
+    return { ...visible, deploymentHash: saved.deploymentHash };
+  }
+  if (kind === "request") {
+    return { ...visible, tx1Hash: saved.tx1Hash };
+  }
+  if (kind === "finalization") {
+    return { ...visible, tx2Hash: saved.tx2Hash };
+  }
+  return { ...visible, expiryHash: saved.expiryHash };
+}
+
+function normalizedWorkspaceIdentity(
+  epoch: number,
+  contractAddress?: string,
+  requestId?: bigint,
+): WorkspaceOperationIdentity {
+  return {
+    epoch,
+    contractAddress: contractAddress?.toLowerCase(),
+    requestId: requestId?.toString(),
+  };
+}
+
+function walletAccountFrom(value: unknown): Address | undefined {
+  if (!Array.isArray(value) || typeof value[0] !== "string") return undefined;
+  try {
+    return getAddress(value[0]);
+  } catch {
+    return undefined;
+  }
+}
+
+function isMonadChainValue(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    return BigInt(value) === BigInt(MONAD_TESTNET_CHAIN_ID);
+  } catch {
+    return false;
+  }
+}
 
 function shorten(value: string, start = 7, end = 5): string {
   if (value.length <= start + end + 1) return value;
@@ -94,6 +269,12 @@ function localStorageOrUndefined(): Storage | undefined {
     : globalThis.localStorage;
 }
 
+function browserLockManager(): LockManagerLike | undefined {
+  return typeof navigator === "undefined" || !navigator.locks
+    ? undefined
+    : (navigator.locks as unknown as LockManagerLike);
+}
+
 function findLocalReference(
   localState: StoredLocalState,
   contractAddress: string,
@@ -110,10 +291,12 @@ function findLocalReference(
 function flowFromReadiness(
   readiness: RequestReadiness,
   hasRequesterAccess: boolean,
+  currentBlock?: bigint,
 ): FlowState {
   if (readiness.phase === "finalized") return "finalized";
   if (readiness.phase === "expired") return "expired";
   if (readiness.phase === "proof-expired") return "proof-expired";
+  if (isBrowserProofCutoff(readiness, currentBlock)) return "safety-cutoff";
   if (readiness.phase === "permissionless") return "rescue-ready";
   if (
     readiness.phase === "requester" &&
@@ -123,6 +306,23 @@ function flowFromReadiness(
     return "ready";
   }
   return "waiting";
+}
+
+function flowForWalletSnapshot(
+  request: RandomnessRequest | undefined,
+  currentBlock: bigint | undefined,
+  account: Address | undefined,
+  isMonadChain: boolean,
+): FlowState {
+  if (!account) return "disconnected";
+  if (!isMonadChain) return "wrong-network";
+  if (!request || currentBlock === undefined) return "ready";
+  const readiness = calculateReadiness(request, currentBlock, account);
+  return flowFromReadiness(
+    readiness,
+    account.toLowerCase() === request.requester.toLowerCase(),
+    currentBlock,
+  );
 }
 
 function CopyButton({
@@ -445,6 +645,22 @@ function StateBanner({
       title: "Permissionless rescue is open",
       body: "Anyone may submit Tx2 now. The original requester and resulting seed cannot change.",
     },
+    "safety-cutoff": {
+      title: "Demo Tx2 safety stop",
+      body: readiness
+        ? `This demo stops Tx2 64 blocks early to avoid a paid revert. On-chain proof remains valid through exact block ${formatBlock(
+            readiness.lastProofValidBlock,
+          )}. Advanced callers may use the contract directly.`
+        : "This demo stops Tx2 64 blocks early to avoid a paid revert. Advanced callers may use the contract directly while the on-chain proof remains valid.",
+    },
+    submitted: {
+      title: "Transaction submitted",
+      body: "Its hash is saved in this browser. Check the submitted transaction before sending the same action again.",
+    },
+    busy: {
+      title: "This action is open in another tab",
+      body: "Wait for that tab to save its transaction hash, then check the submitted action or try again.",
+    },
     "proof-expired": {
       title: "The proof window has closed",
       body: "No result can be authenticated. Anyone may mark this request expired without a refund or reward.",
@@ -468,8 +684,8 @@ function StateBanner({
   };
 
   return (
-    <div className={`state-banner state-banner--${flowState}`} role="status" aria-live="polite">
-      <div>
+    <div className={`state-banner state-banner--${flowState}`}>
+      <div role="status" aria-live="polite" aria-atomic="true">
         <span className="state-dot" aria-hidden="true" />
         <strong>{copy[flowState].title}</strong>
       </div>
@@ -486,6 +702,8 @@ export function RandomnessDemo() {
   const [flowState, setFlowState] = useState<FlowState>("disconnected");
   const [provider, setProvider] = useState<InjectedWalletProvider>();
   const [account, setAccount] = useState<Address>();
+  const [isMonadChain, setIsMonadChain] = useState(false);
+  const [writeBusy, setWriteBusy] = useState(false);
   const [contractInput, setContractInput] = useState("");
   const [activeContract, setActiveContract] = useState<Address>();
   const [deploymentHash, setDeploymentHash] = useState<Hash>();
@@ -504,6 +722,20 @@ export function RandomnessDemo() {
   const [explorerResult, setExplorerResult] = useState<ResultRead>();
   const [explorerError, setExplorerError] = useState<string>();
   const [explorerLoading, setExplorerLoading] = useState(false);
+  const [submittedTransactionHash, setSubmittedTransactionHash] =
+    useState<Hash>();
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const accountRef = useRef<Address | undefined>(undefined);
+  const isMonadChainRef = useRef(false);
+  const requestRef = useRef<RandomnessRequest | undefined>(undefined);
+  const currentBlockRef = useRef<bigint | undefined>(undefined);
+  const writeBusyRef = useRef(false);
+  const selectionEpochRef = useRef(0);
+  const explorerEpochRef = useRef(0);
+  const recoveryBusyRef = useRef(false);
+  const workspaceIdentityRef = useRef<WorkspaceOperationIdentity>(
+    normalizedWorkspaceIdentity(0),
+  );
 
   const latestLocalRequest = useMemo(
     () =>
@@ -511,6 +743,73 @@ export function RandomnessDemo() {
         (item) => item.chainId === MONAD_TESTNET_CHAIN_ID,
       ),
     [localState],
+  );
+
+  const monadPendingTransactions = useMemo(
+    () =>
+      localState.pendingTransactions.filter(
+        (item) => item.chainId === MONAD_TESTNET_CHAIN_ID,
+      ),
+    [localState.pendingTransactions],
+  );
+  const submittedPending = useMemo(
+    () =>
+      monadPendingTransactions.find(
+        (item) => item.transactionHash === submittedTransactionHash,
+      ) ?? monadPendingTransactions[0],
+    [monadPendingTransactions, submittedTransactionHash],
+  );
+  const pendingDeployment = useMemo(
+    () =>
+      monadPendingTransactions.find((item) =>
+        pendingMatchesAction(item, {
+          kind: "deployment",
+          chainId: MONAD_TESTNET_CHAIN_ID,
+        }),
+      ),
+    [monadPendingTransactions],
+  );
+  const pendingRequest = useMemo(
+    () =>
+      activeContract
+        ? monadPendingTransactions.find((item) =>
+            pendingMatchesAction(item, {
+              kind: "request",
+              chainId: MONAD_TESTNET_CHAIN_ID,
+              contractAddress: activeContract,
+              requester: account,
+            }),
+          )
+        : undefined,
+    [account, activeContract, monadPendingTransactions],
+  );
+  const pendingFinalization = useMemo(
+    () =>
+      activeContract && requestId !== undefined
+        ? monadPendingTransactions.find((item) =>
+            pendingMatchesAction(item, {
+              kind: "finalization",
+              chainId: MONAD_TESTNET_CHAIN_ID,
+              contractAddress: activeContract,
+              requestId: requestId.toString(),
+            }),
+          )
+        : undefined,
+    [activeContract, monadPendingTransactions, requestId],
+  );
+  const pendingExpiry = useMemo(
+    () =>
+      activeContract && requestId !== undefined
+        ? monadPendingTransactions.find((item) =>
+            pendingMatchesAction(item, {
+              kind: "expiry",
+              chainId: MONAD_TESTNET_CHAIN_ID,
+              contractAddress: activeContract,
+              requestId: requestId.toString(),
+            }),
+          )
+        : undefined,
+    [activeContract, monadPendingTransactions, requestId],
   );
 
   const readiness = useMemo(
@@ -532,34 +831,400 @@ export function RandomnessDemo() {
         )
       : 0;
 
-  const handleFailure = useCallback((error: unknown) => {
+  const handleFailure = useCallback(
+    (error: unknown, identity?: WorkspaceOperationIdentity) => {
+      if (
+        identity &&
+        !workspaceOperationMatches(identity, workspaceIdentityRef.current)
+      ) {
+        return;
+      }
+      const mapped = mapClientError(error);
+      const message =
+        mapped.code === "UNKNOWN" && error instanceof Error
+          ? error.message
+          : mapped.message;
+      if (mapped.code === "WRONG_NETWORK") {
+        isMonadChainRef.current = false;
+        setIsMonadChain(false);
+      }
+      setErrorMessage(message);
+      setFlowState(
+        mapped.code === "WRONG_NETWORK" ||
+          (accountRef.current && !isMonadChainRef.current)
+          ? "wrong-network"
+          : !accountRef.current
+            ? "disconnected"
+            : "error",
+      );
+    },
+    [],
+  );
+
+  function beginWrite(): boolean {
+    if (writeBusyRef.current || recoveryBusyRef.current) return false;
+    writeBusyRef.current = true;
+    selectionEpochRef.current += 1;
+    explorerEpochRef.current += 1;
+    setWriteBusy(true);
+    setExplorerLoading(false);
+    return true;
+  }
+
+  function finishWrite(): void {
+    writeBusyRef.current = false;
+    setWriteBusy(false);
+  }
+
+  function applyLocalState(
+    next: StoredLocalState,
+    preferredTransactionHash?: Hash,
+  ): void {
+    setLocalState(next);
+    const nextSubmitted =
+      next.pendingTransactions.find(
+        (item) =>
+          item.chainId === MONAD_TESTNET_CHAIN_ID &&
+          item.transactionHash === preferredTransactionHash,
+      ) ??
+      next.pendingTransactions.find(
+        (item) => item.chainId === MONAD_TESTNET_CHAIN_ID,
+      );
+    setSubmittedTransactionHash(nextSubmitted?.transactionHash);
+  }
+
+  useEffect(() => subscribeToStoredState(
+    globalThis as unknown as StorageEventTargetLike,
+    localStorageOrUndefined(),
+    (next) => {
+      setLocalState(next);
+      const nextPending = next.pendingTransactions.find(
+        (item) => item.chainId === MONAD_TESTNET_CHAIN_ID,
+      );
+      setSubmittedTransactionHash((current) =>
+        next.pendingTransactions.some(
+          (item) =>
+            item.chainId === MONAD_TESTNET_CHAIN_ID &&
+            item.transactionHash === current,
+        )
+          ? current
+          : nextPending?.transactionHash,
+      );
+      if (writeBusyRef.current || recoveryBusyRef.current) return;
+      setFlowState((current) =>
+        nextPending
+          ? "submitted"
+          : current === "submitted"
+            ? flowForWalletSnapshot(
+                requestRef.current,
+                currentBlockRef.current,
+                accountRef.current,
+                isMonadChainRef.current,
+              )
+            : current,
+      );
+    },
+  ), []);
+
+  function handleBlockedWrite(
+    result: Exclude<
+      PendingWriteLockResult<unknown>,
+      { status: "completed"; value: unknown }
+    >,
+  ): void {
+    if (result.status === "pending") {
+      const latest = loadStoredState(localStorageOrUndefined());
+      applyLocalState(latest, result.pending.transactionHash);
+      setErrorMessage(
+        "This exact action is already submitted in another tab. Check the saved transaction before submitting it again.",
+      );
+      setFlowState("submitted");
+      return;
+    }
+    if (result.status === "busy") {
+      setErrorMessage(
+        "Another tab is already preparing this exact action. Wait for that tab to save its transaction hash, then try again.",
+      );
+      setFlowState("busy");
+      return;
+    }
+    setErrorMessage(
+      "This browser cannot safely coordinate paid transactions across tabs. Read-only exploration and saved-transaction recovery remain available; use a browser with Web Locks to submit.",
+    );
+    setFlowState("error");
+  }
+
+  async function handleSubmittedFailure(
+    error: unknown,
+    transactionHash: Hash,
+    identity?: WorkspaceOperationIdentity,
+  ): Promise<void> {
+    if (
+      identity &&
+      !workspaceOperationMatches(identity, workspaceIdentityRef.current)
+    ) {
+      return;
+    }
     const mapped = mapClientError(error);
-    setErrorMessage(mapped.message);
-    setFlowState(mapped.code === "WRONG_NETWORK" ? "wrong-network" : "error");
-  }, []);
+    if (pendingFailureDisposition(mapped.code) === "forget") {
+      const storage = localStorageOrUndefined();
+      const { storedBeforeForget, next } =
+        await runWithStoredStateMutationLock({
+          lockManager: browserLockManager(),
+          mutate: () => {
+            const storedBeforeForget = loadStoredState(storage);
+            const next = forgetPendingTransaction(storage, transactionHash);
+            return { storedBeforeForget, next };
+          },
+        });
+      const revertedPending = storedBeforeForget.pendingTransactions.find(
+        (item) => item.transactionHash === transactionHash,
+      );
+      applyLocalState(next);
+      let restoreKind: StoredPendingTransaction["kind"] | undefined;
+      let savedHashes: VisibleTransactionHashes = {};
+      if (revertedPending?.kind === "deployment") {
+        const currentContract = workspaceIdentityRef.current.contractAddress;
+        const savedDemo = storedBeforeForget.demoContracts.find(
+          (item) =>
+            item.chainId === MONAD_TESTNET_CHAIN_ID &&
+            item.contractAddress.toLowerCase() === currentContract,
+        );
+        restoreKind = revertedPending.kind;
+        savedHashes = { deploymentHash: savedDemo?.deploymentTxHash };
+      } else if (
+        revertedPending &&
+        workspaceIdentityRef.current.contractAddress ===
+          revertedPending.contractAddress.toLowerCase()
+      ) {
+        const currentRequestId = workspaceIdentityRef.current.requestId;
+        const savedReference =
+          currentRequestId === undefined
+            ? undefined
+            : findLocalReference(
+                storedBeforeForget,
+                revertedPending.contractAddress,
+                BigInt(currentRequestId),
+              );
+        if (revertedPending.kind === "request") {
+          restoreKind = revertedPending.kind;
+          savedHashes = { tx1Hash: savedReference?.tx1Hash };
+        } else if (revertedPending.requestId === currentRequestId) {
+          restoreKind = revertedPending.kind;
+          savedHashes =
+            revertedPending.kind === "finalization"
+              ? { tx2Hash: savedReference?.tx2Hash }
+              : { expiryHash: savedReference?.expiryHash };
+        }
+      }
+      if (restoreKind) {
+        const restored = visibleHashesAfterConfirmedRevert(
+          restoreKind,
+          { deploymentHash, tx1Hash, tx2Hash, expiryHash },
+          savedHashes,
+        );
+        if (restoreKind === "deployment") {
+          setDeploymentHash(restored.deploymentHash);
+        } else if (restoreKind === "request") {
+          setTx1Hash(restored.tx1Hash);
+        } else if (restoreKind === "finalization") {
+          setTx2Hash(restored.tx2Hash);
+        } else {
+          setExpiryHash(restored.expiryHash);
+        }
+      }
+      setErrorMessage(
+        mapped.code === "TRANSACTION_REPLACED"
+          ? "The submitted transaction was confirmed as cancelled or replaced by a different transaction. This exact action is safe to submit again."
+          : "The submitted transaction was confirmed as reverted. This exact action is safe to submit again.",
+      );
+      setFlowState(
+        next.pendingTransactions.some(
+          (item) => item.chainId === MONAD_TESTNET_CHAIN_ID,
+        )
+          ? "submitted"
+          : flowForWalletSnapshot(
+              requestRef.current,
+              currentBlockRef.current,
+              accountRef.current,
+              isMonadChainRef.current,
+            ),
+      );
+      return;
+    }
+    setSubmittedTransactionHash(transactionHash);
+    setErrorMessage(
+      `${mapped.message} The submitted hash remains saved; check it before sending the same action again.`,
+    );
+    setFlowState("submitted");
+  }
+
+  async function prepareWalletWrite(
+    walletProvider: InjectedWalletProvider,
+  ): Promise<Address> {
+    await ensureMonadTestnet(walletProvider);
+    const accounts = await walletProvider.request({ method: "eth_accounts" });
+    const currentAccount = walletAccountFrom(accounts);
+    if (!currentAccount) {
+      accountRef.current = undefined;
+      setAccount(undefined);
+      throw new Error("Reconnect your wallet before writing.");
+    }
+    accountRef.current = currentAccount;
+    isMonadChainRef.current = true;
+    setProvider(walletProvider);
+    setAccount(currentAccount);
+    setIsMonadChain(true);
+    return currentAccount;
+  }
 
   useEffect(() => {
     const hydrationTimer = globalThis.setTimeout(() => {
-      const stored = loadStoredState();
+      const storage = localStorageOrUndefined();
+      const stored = loadStoredState(storage);
+      const pending = readPendingTransactions(
+        storage,
+        MONAD_TESTNET_CHAIN_ID,
+      );
+      const restoredPending = pending[0];
       setLocalState(stored);
+      setSubmittedTransactionHash(restoredPending?.transactionHash);
       const saved = stored.demoContracts.find(
         (item) => item.chainId === MONAD_TESTNET_CHAIN_ID,
       );
       const newestMonadRequest = stored.recentRequests.find(
         (item) => item.chainId === MONAD_TESTNET_CHAIN_ID,
       );
-      if (saved) {
-        setActiveContract(saved.contractAddress);
-        setContractInput(saved.contractAddress);
-        setDeploymentHash(saved.deploymentTxHash);
+      const pendingContract =
+        restoredPending && restoredPending.kind !== "deployment"
+          ? restoredPending.contractAddress
+          : undefined;
+      const restoredContract = pendingContract ?? saved?.contractAddress;
+      const restoredRequestId =
+        restoredPending?.kind === "finalization" ||
+        restoredPending?.kind === "expiry"
+          ? BigInt(restoredPending.requestId)
+          : undefined;
+      if (restoredContract && !writeBusyRef.current) {
+        workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+          workspaceIdentityRef.current.epoch + 1,
+          restoredContract,
+          restoredRequestId,
+        );
+        setActiveContract(restoredContract);
+        setContractInput(restoredContract);
+        setRequestId(restoredRequestId);
+        requestRef.current = undefined;
+        setRequest(undefined);
+        setActiveResult(undefined);
+        const restoredReference =
+          restoredRequestId === undefined
+            ? undefined
+            : findLocalReference(
+                stored,
+                restoredContract,
+                restoredRequestId,
+              );
+        setTx1Hash(
+          restoredPending?.kind === "request"
+            ? restoredPending.transactionHash
+            : restoredReference?.tx1Hash,
+        );
+        setTx2Hash(
+          restoredPending?.kind === "finalization"
+            ? restoredPending.transactionHash
+            : restoredReference?.tx2Hash,
+        );
+        setExpiryHash(
+          restoredPending?.kind === "expiry"
+            ? restoredPending.transactionHash
+            : restoredReference?.expiryHash,
+        );
+        setDeploymentHash(
+          restoredPending?.kind === "deployment"
+            ? restoredPending.transactionHash
+            : saved?.contractAddress === restoredContract
+              ? saved.deploymentTxHash
+              : undefined,
+        );
+      } else if (restoredPending?.kind === "deployment") {
+        setDeploymentHash(restoredPending.transactionHash);
       }
       if (newestMonadRequest) {
         setExplorerContract(newestMonadRequest.contractAddress);
         setExplorerRequestId(newestMonadRequest.requestId);
       }
+      if (restoredPending) setFlowState("submitted");
     }, 0);
     return () => globalThis.clearTimeout(hydrationTimer);
   }, []);
+
+  useEffect(() => {
+    if (!provider) return;
+    const eventProvider = provider as WalletEventProvider;
+    let live = true;
+
+    const handleAccountsChanged: WalletEventListener = () => {
+      void (async () => {
+        try {
+          const accounts = await provider.request({ method: "eth_accounts" });
+          if (!live) return;
+          const currentAccount = walletAccountFrom(accounts);
+          accountRef.current = currentAccount;
+          setAccount(currentAccount);
+          setErrorMessage(undefined);
+          setFlowState(
+            flowForWalletSnapshot(
+              requestRef.current,
+              currentBlockRef.current,
+              currentAccount,
+              isMonadChainRef.current,
+            ),
+          );
+        } catch {
+          if (!live) return;
+          accountRef.current = undefined;
+          setAccount(undefined);
+          setFlowState("disconnected");
+        }
+      })();
+    };
+    const handleChainChanged: WalletEventListener = (chainValue) => {
+      if (!live) return;
+      const onMonad = isMonadChainValue(chainValue);
+      isMonadChainRef.current = onMonad;
+      setIsMonadChain(onMonad);
+      if (onMonad) setErrorMessage(undefined);
+      setFlowState(
+        flowForWalletSnapshot(
+          requestRef.current,
+          currentBlockRef.current,
+          accountRef.current,
+          onMonad,
+        ),
+      );
+    };
+    const handleDisconnect: WalletEventListener = () => {
+      if (!live) return;
+      accountRef.current = undefined;
+      isMonadChainRef.current = false;
+      setProvider(undefined);
+      setAccount(undefined);
+      setIsMonadChain(false);
+      setErrorMessage(undefined);
+      setFlowState("disconnected");
+    };
+
+    eventProvider.on?.("accountsChanged", handleAccountsChanged);
+    eventProvider.on?.("chainChanged", handleChainChanged);
+    eventProvider.on?.("disconnect", handleDisconnect);
+    return () => {
+      live = false;
+      eventProvider.removeListener?.("accountsChanged", handleAccountsChanged);
+      eventProvider.removeListener?.("chainChanged", handleChainChanged);
+      eventProvider.removeListener?.("disconnect", handleDisconnect);
+    };
+  }, [provider]);
 
   useEffect(() => {
     let live = true;
@@ -567,7 +1232,10 @@ export function RandomnessDemo() {
     async function pollBlock() {
       try {
         const block = await publicClient.getBlockNumber();
-        if (live) setCurrentBlock(block);
+        if (live) {
+          currentBlockRef.current = block;
+          setCurrentBlock(block);
+        }
       } catch {
         // A transient public-RPC failure should not erase the last good block.
       }
@@ -588,6 +1256,7 @@ export function RandomnessDemo() {
     const contractAddress = activeContract;
     const activeRequestId = requestId;
     const observedBlock = currentBlock;
+    const operationIdentity = { ...workspaceIdentityRef.current };
     let live = true;
 
     async function refreshActiveRequest() {
@@ -597,19 +1266,26 @@ export function RandomnessDemo() {
           contractAddress,
           requestId: activeRequestId,
         });
-        if (!live) return;
+        if (
+          !live ||
+          !workspaceOperationMatches(
+            operationIdentity,
+            workspaceIdentityRef.current,
+          )
+        ) {
+          return;
+        }
+        requestRef.current = latest.request;
         setRequest(latest.request);
         setActiveResult(latest);
-        const nextReadiness = calculateReadiness(
-          latest.request,
-          observedBlock,
-          account,
-        );
+        setErrorMessage(undefined);
         setFlowState((current) => {
-          if (BUSY_STATES.has(current) || current === "wrong-network") return current;
-          return flowFromReadiness(
-            nextReadiness,
-            account?.toLowerCase() === latest.request.requester.toLowerCase(),
+          if (writeBusyRef.current) return current;
+          return flowForWalletSnapshot(
+            latest.request,
+            observedBlock,
+            accountRef.current,
+            isMonadChainRef.current,
           );
         });
       } catch {
@@ -627,16 +1303,47 @@ export function RandomnessDemo() {
     setErrorMessage(undefined);
     try {
       const injected = getInjectedProvider();
-      const connected = await connectMonadWallet(injected);
       setProvider(injected);
+      const connected = await connectMonadWallet(injected);
+      accountRef.current = connected;
+      isMonadChainRef.current = true;
       setAccount(connected);
+      setIsMonadChain(true);
       setFlowState(
-        request && readiness
-          ? flowFromReadiness(
-              readiness,
-              connected.toLowerCase() === request.requester.toLowerCase(),
-            )
-          : "ready",
+        flowForWalletSnapshot(
+          requestRef.current,
+          currentBlockRef.current,
+          connected,
+          true,
+        ),
+      );
+    } catch (error) {
+      handleFailure(error);
+    }
+  }
+
+  async function handleSwitchNetwork() {
+    if (!provider) {
+      await handleConnect();
+      return;
+    }
+    setErrorMessage(undefined);
+    try {
+      await ensureMonadTestnet(provider);
+      const accounts = await provider.request({ method: "eth_accounts" });
+      const currentAccount =
+        walletAccountFrom(accounts) ?? (await connectMonadWallet(provider));
+      accountRef.current = currentAccount;
+      isMonadChainRef.current = true;
+      setAccount(currentAccount);
+      setIsMonadChain(true);
+      setFlowState(
+        flowForWalletSnapshot(
+          requestRef.current,
+          currentBlockRef.current,
+          currentAccount,
+          true,
+        ),
       );
     } catch (error) {
       handleFailure(error);
@@ -645,21 +1352,56 @@ export function RandomnessDemo() {
 
   async function handleUseContract(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (writeBusyRef.current) return;
+    const selectionEpoch = selectionEpochRef.current + 1;
+    selectionEpochRef.current = selectionEpoch;
+    const submittedContract = contractInput;
     setErrorMessage(undefined);
     try {
-      const address = await assertCompatibleContract(publicClient, contractInput);
+      const address = await assertCompatibleContract(
+        publicClient,
+        submittedContract,
+      );
+      if (
+        selectionEpoch !== selectionEpochRef.current ||
+        writeBusyRef.current
+      ) {
+        return;
+      }
+      workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+        workspaceIdentityRef.current.epoch + 1,
+        address,
+      );
       setActiveContract(address);
       setContractInput(address);
+      setDeploymentHash(undefined);
       setRequestId(undefined);
+      requestRef.current = undefined;
       setRequest(undefined);
       setActiveResult(undefined);
-      const next = rememberDemoContract(localStorageOrUndefined(), {
-        chainId: MONAD_TESTNET_CHAIN_ID,
-        contractAddress: address,
+      setTx1Hash(undefined);
+      setTx2Hash(undefined);
+      setExpiryHash(undefined);
+      const storage = localStorageOrUndefined();
+      const next = await runWithStoredStateMutationLock({
+        lockManager: browserLockManager(),
+        mutate: () =>
+          rememberDemoContract(storage, {
+            chainId: MONAD_TESTNET_CHAIN_ID,
+            contractAddress: address,
+          }),
       });
       setLocalState(next);
-      setFlowState(account ? "ready" : "disconnected");
+      setFlowState(
+        flowForWalletSnapshot(
+          undefined,
+          currentBlockRef.current,
+          accountRef.current,
+          isMonadChainRef.current,
+        ),
+      );
     } catch (error) {
+      if (selectionEpoch !== selectionEpochRef.current) return;
       handleFailure(error);
     }
   }
@@ -669,30 +1411,113 @@ export function RandomnessDemo() {
       await handleConnect();
       return;
     }
+    if (pendingDeployment) {
+      setSubmittedTransactionHash(pendingDeployment.transactionHash);
+      setFlowState("submitted");
+      return;
+    }
+    if (!beginWrite()) return;
+    const operationIdentity = { ...workspaceIdentityRef.current };
+    let broadcastHash: Hash | undefined;
     setErrorMessage(undefined);
     setFlowState("deploying");
     try {
-      const walletClient = createMonadWalletClient(provider, account);
-      const deployed = await deployDemoPlatform({
-        walletClient,
-        publicClient,
-        owner: account,
+      const currentAccount = await prepareWalletWrite(provider);
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      const walletClient = createMonadWalletClient(provider, currentAccount);
+      const storage = localStorageOrUndefined();
+      const writeResult = await runWithPendingWriteLock({
+        lockManager: browserLockManager(),
+        storage,
+        action: {
+          kind: "deployment",
+          chainId: MONAD_TESTNET_CHAIN_ID,
+        },
+        write: async () =>
+          await deployDemoPlatform({
+            walletClient,
+            publicClient,
+            owner: currentAccount,
+            onTransactionHash: async (transactionHash) => {
+              broadcastHash = transactionHash;
+              setDeploymentHash(transactionHash);
+              const pendingState = await runWithStoredStateMutationLock({
+                lockManager: browserLockManager(),
+                mutate: () =>
+                  rememberPendingTransaction(storage, {
+                    kind: "deployment",
+                    chainId: MONAD_TESTNET_CHAIN_ID,
+                    transactionHash,
+                  }),
+              });
+              applyLocalState(pendingState, transactionHash);
+              setFlowState("submitted");
+            },
+          }),
       });
+      if (writeResult.status !== "completed") {
+        handleBlockedWrite(writeResult);
+        return;
+      }
+      const deployed = writeResult.value;
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+        operationIdentity.epoch + 1,
+        deployed.contractAddress,
+      );
       setActiveContract(deployed.contractAddress);
       setContractInput(deployed.contractAddress);
       setDeploymentHash(deployed.transactionHash);
       setRequestId(undefined);
+      requestRef.current = undefined;
       setRequest(undefined);
       setActiveResult(undefined);
-      const next = rememberDemoContract(localStorageOrUndefined(), {
-        chainId: MONAD_TESTNET_CHAIN_ID,
-        contractAddress: deployed.contractAddress,
-        deploymentTxHash: deployed.transactionHash,
+      setTx1Hash(undefined);
+      setTx2Hash(undefined);
+      setExpiryHash(undefined);
+      const confirmedState = await runWithStoredStateMutationLock({
+        lockManager: browserLockManager(),
+        mutate: () => {
+          rememberDemoContract(storage, {
+            chainId: MONAD_TESTNET_CHAIN_ID,
+            contractAddress: deployed.contractAddress,
+            deploymentTxHash: deployed.transactionHash,
+          });
+          return forgetPendingTransaction(storage, deployed.transactionHash);
+        },
       });
-      setLocalState(next);
-      setFlowState("ready");
+      applyLocalState(confirmedState);
+      setErrorMessage(undefined);
+      setFlowState(
+        flowForWalletSnapshot(
+          undefined,
+          currentBlockRef.current,
+          accountRef.current,
+          isMonadChainRef.current,
+        ),
+      );
     } catch (error) {
-      handleFailure(error);
+      if (broadcastHash) {
+        await handleSubmittedFailure(error, broadcastHash, operationIdentity);
+      } else {
+        handleFailure(error, operationIdentity);
+      }
+    } finally {
+      finishWrite();
     }
   }
 
@@ -702,41 +1527,137 @@ export function RandomnessDemo() {
       return;
     }
     if (!activeContract) {
-      setErrorMessage("Deploy or paste one compatible platform contract first.");
+      setErrorMessage(
+        "Deploy your own instance or paste the exact published PlatformRandomness contract first.",
+      );
       setFlowState("error");
       return;
     }
+    if (pendingRequest) {
+      setSubmittedTransactionHash(pendingRequest.transactionHash);
+      setFlowState("submitted");
+      return;
+    }
+    if (!beginWrite()) return;
+    const contractAddress = activeContract;
+    const operationIdentity = { ...workspaceIdentityRef.current };
+    let broadcastHash: Hash | undefined;
     setErrorMessage(undefined);
     setFlowState("requesting");
     try {
-      const walletClient = createMonadWalletClient(provider, account);
-      const locked = await requestRandomnessTx({
-        publicClient,
-        walletClient,
-        account,
-        contractAddress: activeContract,
+      const currentAccount = await prepareWalletWrite(provider);
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      const walletClient = createMonadWalletClient(provider, currentAccount);
+      const storage = localStorageOrUndefined();
+      const writeResult = await runWithPendingWriteLock({
+        lockManager: browserLockManager(),
+        storage,
+        action: {
+          kind: "request",
+          chainId: MONAD_TESTNET_CHAIN_ID,
+          contractAddress,
+          requester: currentAccount,
+        },
+        write: async () =>
+          await requestRandomnessTx({
+            publicClient,
+            walletClient,
+            account: currentAccount,
+            contractAddress,
+            onTransactionHash: async (transactionHash) => {
+              broadcastHash = transactionHash;
+              setTx1Hash(transactionHash);
+              const pendingState = await runWithStoredStateMutationLock({
+                lockManager: browserLockManager(),
+                mutate: () =>
+                  rememberPendingTransaction(storage, {
+                    kind: "request",
+                    chainId: MONAD_TESTNET_CHAIN_ID,
+                    contractAddress,
+                    requester: currentAccount,
+                    transactionHash,
+                  }),
+              });
+              applyLocalState(pendingState, transactionHash);
+              setFlowState("submitted");
+            },
+          }),
       });
+      if (writeResult.status !== "completed") {
+        handleBlockedWrite(writeResult);
+        return;
+      }
+      const locked = writeResult.value;
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
       const pending = await readRandomnessResult({
         publicClient,
-        contractAddress: activeContract,
+        contractAddress,
         requestId: locked.requestId,
       });
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+        operationIdentity.epoch + 1,
+        contractAddress,
+        locked.requestId,
+      );
       setRequestId(locked.requestId);
+      requestRef.current = pending.request;
       setRequest(pending.request);
       setActiveResult(pending);
       setTx1Hash(locked.transactionHash);
       setTx2Hash(undefined);
       setExpiryHash(undefined);
-      const next = rememberRequest(localStorageOrUndefined(), {
-        chainId: MONAD_TESTNET_CHAIN_ID,
-        contractAddress: activeContract,
-        requestId: locked.requestId,
-        tx1Hash: locked.transactionHash,
+      const confirmedState = await runWithStoredStateMutationLock({
+        lockManager: browserLockManager(),
+        mutate: () => {
+          rememberRequest(storage, {
+            chainId: MONAD_TESTNET_CHAIN_ID,
+            contractAddress,
+            requestId: locked.requestId,
+            tx1Hash: locked.transactionHash,
+          });
+          return forgetPendingTransaction(storage, locked.transactionHash);
+        },
       });
-      setLocalState(next);
-      setFlowState("waiting");
+      applyLocalState(confirmedState);
+      setErrorMessage(undefined);
+      setFlowState(
+        flowForWalletSnapshot(
+          pending.request,
+          currentBlockRef.current,
+          accountRef.current,
+          isMonadChainRef.current,
+        ),
+      );
     } catch (error) {
-      handleFailure(error);
+      if (broadcastHash) {
+        await handleSubmittedFailure(error, broadcastHash, operationIdentity);
+      } else {
+        handleFailure(error, operationIdentity);
+      }
+    } finally {
+      finishWrite();
     }
   }
 
@@ -747,45 +1668,229 @@ export function RandomnessDemo() {
     }
     if (!activeContract || requestId === undefined || !request) return;
 
+    if (pendingFinalization) {
+      setSubmittedTransactionHash(pendingFinalization.transactionHash);
+      setFlowState("submitted");
+      return;
+    }
+    if (!beginWrite()) return;
+    const contractAddress = activeContract;
+    const activeRequestId = requestId;
+    const activeRequest = request;
+    const storedTx1Hash = tx1Hash ?? activeReference?.tx1Hash;
+    const operationIdentity = { ...workspaceIdentityRef.current };
+    let broadcastHash: Hash | undefined;
     setErrorMessage(undefined);
     setFlowState("finalizing");
     try {
-      const walletClient = createMonadWalletClient(provider, account);
+      const initialHead = await publicClient.getBlockNumber();
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      currentBlockRef.current = initialHead;
+      setCurrentBlock(initialHead);
+      const initialReadiness = calculateReadiness(
+        activeRequest,
+        initialHead,
+        accountRef.current,
+      );
+      if (initialReadiness.phase === "proof-expired") {
+        setFlowState(
+          flowForWalletSnapshot(
+            activeRequest,
+            initialHead,
+            accountRef.current,
+            isMonadChainRef.current,
+          ),
+        );
+        return;
+      }
+      if (isBrowserProofCutoff(initialReadiness, initialHead)) {
+        setFlowState(
+          flowForWalletSnapshot(
+            activeRequest,
+            initialHead,
+            accountRef.current,
+            isMonadChainRef.current,
+          ),
+        );
+        return;
+      }
       const targetBlocks = [
-        request.firstTargetBlock,
-        request.secondTargetBlock,
-        request.thirdTargetBlock,
+        activeRequest.firstTargetBlock,
+        activeRequest.secondTargetBlock,
+        activeRequest.thirdTargetBlock,
       ] as const;
       const headers = await fetchRawHeaders(targetBlocks);
-      const finalized = await finalizeRandomnessTx({
-        publicClient,
-        walletClient,
-        account,
-        contractAddress: activeContract,
-        requestId,
-        headers,
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      const writeHead = await publicClient.getBlockNumber();
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      currentBlockRef.current = writeHead;
+      setCurrentBlock(writeHead);
+      const readinessBeforeWrite = calculateReadiness(
+        activeRequest,
+        writeHead,
+        accountRef.current,
+      );
+      if (readinessBeforeWrite.phase === "proof-expired") {
+        setFlowState(
+          flowForWalletSnapshot(
+            activeRequest,
+            writeHead,
+            accountRef.current,
+            isMonadChainRef.current,
+          ),
+        );
+        return;
+      }
+      if (isBrowserProofCutoff(readinessBeforeWrite, writeHead)) {
+        setFlowState(
+          flowForWalletSnapshot(
+            activeRequest,
+            writeHead,
+            accountRef.current,
+            isMonadChainRef.current,
+          ),
+        );
+        return;
+      }
+      const currentAccount = await prepareWalletWrite(provider);
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      const signerReadiness = calculateReadiness(
+        activeRequest,
+        writeHead,
+        currentAccount,
+      );
+      if (!signerReadiness.canFinalize) {
+        setFlowState(
+          flowForWalletSnapshot(
+            activeRequest,
+            writeHead,
+            currentAccount,
+            true,
+          ),
+        );
+        return;
+      }
+      const walletClient = createMonadWalletClient(provider, currentAccount);
+      const storage = localStorageOrUndefined();
+      const writeResult = await runWithPendingWriteLock({
+        lockManager: browserLockManager(),
+        storage,
+        action: {
+          kind: "finalization",
+          chainId: MONAD_TESTNET_CHAIN_ID,
+          contractAddress,
+          requestId: activeRequestId,
+        },
+        write: async () =>
+          await finalizeRandomnessTx({
+            publicClient,
+            walletClient,
+            account: currentAccount,
+            contractAddress,
+            requestId: activeRequestId,
+            headers,
+            onTransactionHash: async (transactionHash) => {
+              broadcastHash = transactionHash;
+              setTx2Hash(transactionHash);
+              const pendingState = await runWithStoredStateMutationLock({
+                lockManager: browserLockManager(),
+                mutate: () =>
+                  rememberPendingTransaction(storage, {
+                    kind: "finalization",
+                    chainId: MONAD_TESTNET_CHAIN_ID,
+                    contractAddress,
+                    requestId: activeRequestId,
+                    transactionHash,
+                  }),
+              });
+              applyLocalState(pendingState, transactionHash);
+              setFlowState("submitted");
+            },
+          }),
       });
+      if (writeResult.status !== "completed") {
+        handleBlockedWrite(writeResult);
+        return;
+      }
+      const finalized = writeResult.value;
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
       const permanent: ResultRead = {
-        contractAddress: activeContract,
-        requestId,
+        contractAddress,
+        requestId: activeRequestId,
         request: finalized.request,
         drawZeroBased: finalized.drawZeroBased,
         drawOneBased: finalized.drawOneBased,
       };
+      requestRef.current = finalized.request;
       setRequest(finalized.request);
       setActiveResult(permanent);
       setTx2Hash(finalized.transactionHash);
-      const next = rememberRequest(localStorageOrUndefined(), {
-        chainId: MONAD_TESTNET_CHAIN_ID,
-        contractAddress: activeContract,
-        requestId,
-        tx1Hash: tx1Hash ?? activeReference?.tx1Hash,
-        tx2Hash: finalized.transactionHash,
+      const confirmedState = await runWithStoredStateMutationLock({
+        lockManager: browserLockManager(),
+        mutate: () => {
+          rememberRequest(storage, {
+            chainId: MONAD_TESTNET_CHAIN_ID,
+            contractAddress,
+            requestId: activeRequestId,
+            tx1Hash: storedTx1Hash,
+            tx2Hash: finalized.transactionHash,
+          });
+          return forgetPendingTransaction(storage, finalized.transactionHash);
+        },
       });
-      setLocalState(next);
-      setFlowState("finalized");
+      applyLocalState(confirmedState);
+      setErrorMessage(undefined);
+      setFlowState(
+        flowForWalletSnapshot(
+          finalized.request,
+          currentBlockRef.current,
+          accountRef.current,
+          isMonadChainRef.current,
+        ),
+      );
     } catch (error) {
-      handleFailure(error);
+      if (broadcastHash) {
+        await handleSubmittedFailure(error, broadcastHash, operationIdentity);
+      } else {
+        handleFailure(error, operationIdentity);
+      }
+    } finally {
+      finishWrite();
     }
   }
 
@@ -796,33 +1901,410 @@ export function RandomnessDemo() {
     }
     if (!activeContract || requestId === undefined) return;
 
+    if (pendingExpiry) {
+      setSubmittedTransactionHash(pendingExpiry.transactionHash);
+      setFlowState("submitted");
+      return;
+    }
+    if (!beginWrite()) return;
+    const contractAddress = activeContract;
+    const activeRequestId = requestId;
+    const operationIdentity = { ...workspaceIdentityRef.current };
+    let broadcastHash: Hash | undefined;
     setErrorMessage(undefined);
     setFlowState("expiring");
     try {
-      const walletClient = createMonadWalletClient(provider, account);
-      const expired = await expireRandomnessRequest({
-        publicClient,
-        walletClient,
-        account,
-        contractAddress: activeContract,
-        requestId,
+      const currentAccount = await prepareWalletWrite(provider);
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
+      const walletClient = createMonadWalletClient(provider, currentAccount);
+      const storage = localStorageOrUndefined();
+      const writeResult = await runWithPendingWriteLock({
+        lockManager: browserLockManager(),
+        storage,
+        action: {
+          kind: "expiry",
+          chainId: MONAD_TESTNET_CHAIN_ID,
+          contractAddress,
+          requestId: activeRequestId,
+        },
+        write: async () =>
+          await expireRandomnessRequest({
+            publicClient,
+            walletClient,
+            account: currentAccount,
+            contractAddress,
+            requestId: activeRequestId,
+            onTransactionHash: async (transactionHash) => {
+              broadcastHash = transactionHash;
+              setExpiryHash(transactionHash);
+              const pendingState = await runWithStoredStateMutationLock({
+                lockManager: browserLockManager(),
+                mutate: () =>
+                  rememberPendingTransaction(storage, {
+                    kind: "expiry",
+                    chainId: MONAD_TESTNET_CHAIN_ID,
+                    contractAddress,
+                    requestId: activeRequestId,
+                    transactionHash,
+                  }),
+              });
+              applyLocalState(pendingState, transactionHash);
+              setFlowState("submitted");
+            },
+          }),
       });
+      if (writeResult.status !== "completed") {
+        handleBlockedWrite(writeResult);
+        return;
+      }
+      const expired = writeResult.value;
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
       const latest = await readRandomnessResult({
         publicClient,
-        contractAddress: activeContract,
-        requestId,
+        contractAddress,
+        requestId: activeRequestId,
       });
+      if (
+        !workspaceOperationMatches(
+          operationIdentity,
+          workspaceIdentityRef.current,
+        )
+      ) {
+        return;
+      }
       setExpiryHash(expired.transactionHash);
+      requestRef.current = latest.request;
       setRequest(latest.request);
       setActiveResult(latest);
-      setFlowState("expired");
+      const confirmedState = await runWithStoredStateMutationLock({
+        lockManager: browserLockManager(),
+        mutate: () => {
+          rememberRequest(storage, {
+            chainId: MONAD_TESTNET_CHAIN_ID,
+            contractAddress,
+            requestId: activeRequestId,
+            tx1Hash: tx1Hash ?? activeReference?.tx1Hash,
+            tx2Hash: tx2Hash ?? activeReference?.tx2Hash,
+            expiryHash: expired.transactionHash,
+          });
+          return forgetPendingTransaction(storage, expired.transactionHash);
+        },
+      });
+      applyLocalState(confirmedState);
+      setErrorMessage(undefined);
+      setFlowState(
+        flowForWalletSnapshot(
+          latest.request,
+          currentBlockRef.current,
+          accountRef.current,
+          isMonadChainRef.current,
+        ),
+      );
     } catch (error) {
-      handleFailure(error);
+      if (broadcastHash) {
+        await handleSubmittedFailure(error, broadcastHash, operationIdentity);
+      } else {
+        handleFailure(error, operationIdentity);
+      }
+    } finally {
+      finishWrite();
+    }
+  }
+
+  async function handleCheckSubmittedTransaction() {
+    if (
+      !submittedPending ||
+      recoveryBusyRef.current ||
+      writeBusyRef.current
+    ) {
+      return;
+    }
+    const pending = submittedPending;
+    let recoveryHash = pending.transactionHash;
+    const recoverySelectionEpoch = selectionEpochRef.current;
+    const recoveryWorkspaceIdentity = { ...workspaceIdentityRef.current };
+    recoveryBusyRef.current = true;
+    setRecoveryLoading(true);
+    setErrorMessage(undefined);
+    setFlowState("submitted");
+
+    try {
+      const storage = localStorageOrUndefined();
+      let confirmedState: StoredLocalState;
+      let recoveredWorkspace = false;
+      const observeReplacementHash = async (transactionHash: Hash) => {
+        recoveryHash = transactionHash;
+        const replacementState = await runWithStoredStateMutationLock({
+          lockManager: browserLockManager(),
+          mutate: () =>
+            rememberPendingTransaction(storage, {
+              ...pending,
+              transactionHash,
+            }),
+        });
+        applyLocalState(replacementState, transactionHash);
+      };
+
+      if (pending.kind === "deployment") {
+        const deployed = await recoverDemoDeployment({
+          publicClient,
+          transactionHash: pending.transactionHash,
+          onTransactionHash: observeReplacementHash,
+        });
+        confirmedState = await runWithStoredStateMutationLock({
+          lockManager: browserLockManager(),
+          mutate: () => {
+            rememberDemoContract(storage, {
+              chainId: MONAD_TESTNET_CHAIN_ID,
+              contractAddress: deployed.contractAddress,
+              deploymentTxHash: deployed.transactionHash,
+            });
+            return forgetPendingTransaction(
+              storage,
+              deployed.transactionHash,
+            );
+          },
+        });
+        applyLocalState(confirmedState);
+        if (
+          recoveryWorkspaceMayApply(
+            recoverySelectionEpoch,
+            selectionEpochRef.current,
+            recoveryWorkspaceIdentity,
+            workspaceIdentityRef.current,
+          )
+        ) {
+          recoveredWorkspace = true;
+          workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+            workspaceIdentityRef.current.epoch + 1,
+            deployed.contractAddress,
+          );
+          setActiveContract(deployed.contractAddress);
+          setContractInput(deployed.contractAddress);
+          setDeploymentHash(deployed.transactionHash);
+          setRequestId(undefined);
+          requestRef.current = undefined;
+          setRequest(undefined);
+          setActiveResult(undefined);
+          setTx1Hash(undefined);
+          setTx2Hash(undefined);
+          setExpiryHash(undefined);
+        }
+      } else if (pending.kind === "request") {
+        const locked = await recoverRandomnessRequestTx({
+          publicClient,
+          contractAddress: pending.contractAddress,
+          transactionHash: pending.transactionHash,
+          expectedRequester: pending.requester,
+          onTransactionHash: observeReplacementHash,
+        });
+        const latest = await readRandomnessResult({
+          publicClient,
+          contractAddress: pending.contractAddress,
+          requestId: locked.requestId,
+        });
+        confirmedState = await runWithStoredStateMutationLock({
+          lockManager: browserLockManager(),
+          mutate: () => {
+            rememberRequest(storage, {
+              chainId: MONAD_TESTNET_CHAIN_ID,
+              contractAddress: pending.contractAddress,
+              requestId: locked.requestId,
+              tx1Hash: locked.transactionHash,
+            });
+            return forgetPendingTransaction(storage, locked.transactionHash);
+          },
+        });
+        applyLocalState(confirmedState);
+        if (
+          recoveryWorkspaceMayApply(
+            recoverySelectionEpoch,
+            selectionEpochRef.current,
+            recoveryWorkspaceIdentity,
+            workspaceIdentityRef.current,
+          )
+        ) {
+          recoveredWorkspace = true;
+          workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+            workspaceIdentityRef.current.epoch + 1,
+            pending.contractAddress,
+            locked.requestId,
+          );
+          setActiveContract(pending.contractAddress);
+          setContractInput(pending.contractAddress);
+          setDeploymentHash(undefined);
+          setRequestId(locked.requestId);
+          requestRef.current = latest.request;
+          setRequest(latest.request);
+          setActiveResult(latest);
+          setTx1Hash(locked.transactionHash);
+          setTx2Hash(undefined);
+          setExpiryHash(undefined);
+        }
+      } else if (pending.kind === "finalization") {
+        const finalized = await recoverRandomnessFinalizationTx({
+          publicClient,
+          contractAddress: pending.contractAddress,
+          requestId: BigInt(pending.requestId),
+          transactionHash: pending.transactionHash,
+          onTransactionHash: observeReplacementHash,
+        });
+        const recoveredRequestId = BigInt(pending.requestId);
+        confirmedState = await runWithStoredStateMutationLock({
+          lockManager: browserLockManager(),
+          mutate: () => {
+            rememberRequest(storage, {
+              chainId: MONAD_TESTNET_CHAIN_ID,
+              contractAddress: pending.contractAddress,
+              requestId: recoveredRequestId,
+              tx2Hash: finalized.transactionHash,
+            });
+            return forgetPendingTransaction(
+              storage,
+              finalized.transactionHash,
+            );
+          },
+        });
+        applyLocalState(confirmedState);
+        if (
+          recoveryWorkspaceMayApply(
+            recoverySelectionEpoch,
+            selectionEpochRef.current,
+            recoveryWorkspaceIdentity,
+            workspaceIdentityRef.current,
+          )
+        ) {
+          recoveredWorkspace = true;
+          const permanent: ResultRead = {
+            contractAddress: pending.contractAddress,
+            requestId: recoveredRequestId,
+            request: finalized.request,
+            drawZeroBased: finalized.drawZeroBased,
+            drawOneBased: finalized.drawOneBased,
+          };
+          const reference = findLocalReference(
+            confirmedState,
+            pending.contractAddress,
+            recoveredRequestId,
+          );
+          workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+            workspaceIdentityRef.current.epoch + 1,
+            pending.contractAddress,
+            recoveredRequestId,
+          );
+          setActiveContract(pending.contractAddress);
+          setContractInput(pending.contractAddress);
+          setDeploymentHash(undefined);
+          setRequestId(recoveredRequestId);
+          requestRef.current = finalized.request;
+          setRequest(finalized.request);
+          setActiveResult(permanent);
+          setTx1Hash(reference?.tx1Hash);
+          setTx2Hash(finalized.transactionHash);
+          setExpiryHash(reference?.expiryHash);
+        }
+      } else {
+        const recoveredRequestId = BigInt(pending.requestId);
+        const expired = await recoverRandomnessExpiryTx({
+          publicClient,
+          contractAddress: pending.contractAddress,
+          requestId: recoveredRequestId,
+          transactionHash: pending.transactionHash,
+          onTransactionHash: observeReplacementHash,
+        });
+        const latest = await readRandomnessResult({
+          publicClient,
+          contractAddress: pending.contractAddress,
+          requestId: recoveredRequestId,
+        });
+        confirmedState = await runWithStoredStateMutationLock({
+          lockManager: browserLockManager(),
+          mutate: () => {
+            rememberRequest(storage, {
+              chainId: MONAD_TESTNET_CHAIN_ID,
+              contractAddress: pending.contractAddress,
+              requestId: recoveredRequestId,
+              expiryHash: expired.transactionHash,
+            });
+            return forgetPendingTransaction(storage, expired.transactionHash);
+          },
+        });
+        applyLocalState(confirmedState);
+        if (
+          recoveryWorkspaceMayApply(
+            recoverySelectionEpoch,
+            selectionEpochRef.current,
+            recoveryWorkspaceIdentity,
+            workspaceIdentityRef.current,
+          )
+        ) {
+          recoveredWorkspace = true;
+          const reference = findLocalReference(
+            confirmedState,
+            pending.contractAddress,
+            recoveredRequestId,
+          );
+          workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+            workspaceIdentityRef.current.epoch + 1,
+            pending.contractAddress,
+            recoveredRequestId,
+          );
+          setActiveContract(pending.contractAddress);
+          setContractInput(pending.contractAddress);
+          setDeploymentHash(undefined);
+          setRequestId(recoveredRequestId);
+          requestRef.current = latest.request;
+          setRequest(latest.request);
+          setActiveResult(latest);
+          setTx1Hash(reference?.tx1Hash);
+          setTx2Hash(reference?.tx2Hash);
+          setExpiryHash(expired.transactionHash);
+        }
+      }
+
+      if (recoveredWorkspace) {
+        setErrorMessage(undefined);
+        const stillPending = confirmedState.pendingTransactions.some(
+          (item) => item.chainId === MONAD_TESTNET_CHAIN_ID,
+        );
+        setFlowState(
+          stillPending
+            ? "submitted"
+            : flowForWalletSnapshot(
+                requestRef.current,
+                currentBlockRef.current,
+                accountRef.current,
+                isMonadChainRef.current,
+              ),
+        );
+      }
+    } catch (error) {
+      await handleSubmittedFailure(error, recoveryHash);
+    } finally {
+      recoveryBusyRef.current = false;
+      setRecoveryLoading(false);
     }
   }
 
   async function handleExplore(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (writeBusyRef.current) return;
+    const explorerEpoch = explorerEpochRef.current + 1;
+    explorerEpochRef.current = explorerEpoch;
     setExplorerError(undefined);
     setExplorerLoading(true);
     try {
@@ -834,9 +2316,16 @@ export function RandomnessDemo() {
         contractAddress: explorerContract,
         requestId: BigInt(explorerRequestId),
       });
+      if (
+        explorerEpoch !== explorerEpochRef.current ||
+        writeBusyRef.current
+      ) {
+        return;
+      }
       setExplorerContract(result.contractAddress);
       setExplorerResult(result);
     } catch (error) {
+      if (explorerEpoch !== explorerEpochRef.current) return;
       const mapped = mapClientError(error);
       setExplorerError(
         mapped.code === "UNKNOWN"
@@ -847,53 +2336,60 @@ export function RandomnessDemo() {
       );
       setExplorerResult(undefined);
     } finally {
-      setExplorerLoading(false);
+      if (explorerEpoch === explorerEpochRef.current) {
+        setExplorerLoading(false);
+      }
     }
   }
 
-  function handleLoadIntoWorkspace() {
-    if (!explorerResult) return;
+  async function handleLoadIntoWorkspace() {
+    if (!explorerResult || writeBusyRef.current) return;
 
+    selectionEpochRef.current += 1;
+    workspaceIdentityRef.current = normalizedWorkspaceIdentity(
+      workspaceIdentityRef.current.epoch + 1,
+      explorerResult.contractAddress,
+      explorerResult.requestId,
+    );
     setActiveContract(explorerResult.contractAddress);
     setContractInput(explorerResult.contractAddress);
+    setDeploymentHash(undefined);
     setRequestId(explorerResult.requestId);
+    requestRef.current = explorerResult.request;
     setRequest(explorerResult.request);
     setActiveResult(explorerResult);
     setTx1Hash(explorerReference?.tx1Hash);
     setTx2Hash(explorerReference?.tx2Hash);
     setExpiryHash(undefined);
+    setErrorMessage(undefined);
 
-    if (currentBlock !== undefined) {
-      const loadedReadiness = calculateReadiness(
+    setFlowState(
+      flowForWalletSnapshot(
         explorerResult.request,
-        currentBlock,
-        account,
-      );
-      setFlowState(
-        flowFromReadiness(
-          loadedReadiness,
-          account?.toLowerCase() ===
-            explorerResult.request.requester.toLowerCase(),
-        ),
-      );
-    } else if (explorerResult.request.finalized) {
-      setFlowState("finalized");
-    } else if (explorerResult.request.expired) {
-      setFlowState("expired");
-    } else {
-      setFlowState("waiting");
-    }
+        currentBlockRef.current,
+        accountRef.current,
+        isMonadChainRef.current,
+      ),
+    );
 
-    const next = rememberRequest(localStorageOrUndefined(), {
-      chainId: MONAD_TESTNET_CHAIN_ID,
-      contractAddress: explorerResult.contractAddress,
-      requestId: explorerResult.requestId,
-      tx1Hash: explorerReference?.tx1Hash,
-      tx2Hash: explorerReference?.tx2Hash,
+    const storage = localStorageOrUndefined();
+    const next = await runWithStoredStateMutationLock({
+      lockManager: browserLockManager(),
+      mutate: () =>
+        rememberRequest(storage, {
+          chainId: MONAD_TESTNET_CHAIN_ID,
+          contractAddress: explorerResult.contractAddress,
+          requestId: explorerResult.requestId,
+          tx1Hash: explorerReference?.tx1Hash,
+          tx2Hash: explorerReference?.tx2Hash,
+        }),
     });
     setLocalState(next);
+    const reducedMotion =
+      typeof globalThis.matchMedia === "function" &&
+      globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
     globalThis.document?.getElementById("demo")?.scrollIntoView({
-      behavior: "smooth",
+      behavior: preferredScrollBehavior(reducedMotion),
       block: "start",
     });
   }
@@ -909,11 +2405,18 @@ export function RandomnessDemo() {
         explorerResult.requestId,
       )
     : undefined;
-  const busy = BUSY_STATES.has(flowState);
+  const busy = writeBusy || recoveryLoading;
+  const browserProofCutoff =
+    readiness && currentBlock !== undefined
+      ? isBrowserProofCutoff(readiness, currentBlock)
+      : false;
   const canFinalize = Boolean(
     readiness?.canFinalize &&
       account &&
+      isMonadChain &&
       request &&
+      !browserProofCutoff &&
+      !pendingFinalization &&
       (readiness.phase === "permissionless" ||
         account.toLowerCase() === request.requester.toLowerCase()),
   );
@@ -937,10 +2440,16 @@ export function RandomnessDemo() {
         <button
           className="wallet-button"
           type="button"
-          onClick={handleConnect}
+          onClick={
+            account && !isMonadChain ? handleSwitchNetwork : handleConnect
+          }
           disabled={busy}
         >
-          {account ? shorten(account) : "Connect wallet"}
+          {account
+            ? isMonadChain
+              ? shorten(account)
+              : "Switch to Monad"
+            : "Connect wallet"}
         </button>
       </header>
 
@@ -1014,7 +2523,10 @@ export function RandomnessDemo() {
           <li>
             <span>01</span>
             <h3>Choose an isolated platform</h3>
-            <p>Deploy your own instance or paste any compatible contract.</p>
+            <p>
+              Deploy your own instance or paste the exact published
+              PlatformRandomness contract.
+            </p>
           </li>
           <li>
             <span>02</span>
@@ -1062,6 +2574,38 @@ export function RandomnessDemo() {
             errorMessage={errorMessage}
           />
 
+          {submittedPending ? (
+            <div className="selected-contract" role="status">
+              <span>
+                {submittedPending.kind === "deployment"
+                  ? "Deployment submitted"
+                  : submittedPending.kind === "request"
+                    ? "Tx1 submitted"
+                    : submittedPending.kind === "finalization"
+                      ? "Tx2 submitted"
+                      : "Expiry submitted"}
+              </span>
+              <a
+                href={transactionExplorerUrl(submittedPending.transactionHash)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {shorten(submittedPending.transactionHash)} ↗
+              </a>
+              <CopyButton value={submittedPending.transactionHash} />
+              <button
+                className="button button--secondary"
+                type="button"
+                onClick={handleCheckSubmittedTransaction}
+                disabled={recoveryLoading || busy}
+              >
+                {recoveryLoading
+                  ? "Checking confirmation…"
+                  : "Check submitted transaction"}
+              </button>
+            </div>
+          ) : null}
+
           {errorMessage ? (
             <div className="inline-error" role="alert">
               <strong>Action paused.</strong>
@@ -1084,7 +2628,13 @@ export function RandomnessDemo() {
                       private key or pays the transaction.
                     </p>
                   </div>
-                  <span>{account ? "Connected" : "Required to write"}</span>
+                  <span>
+                    {account
+                      ? isMonadChain
+                        ? "Connected"
+                        : "Wrong network"
+                      : "Required to write"}
+                  </span>
                 </div>
 
                 <div className="wallet-line">
@@ -1100,6 +2650,14 @@ export function RandomnessDemo() {
                         ? "Switch to Monad testnet"
                         : "Connect wallet"}
                     </button>
+                  ) : !isMonadChain ? (
+                    <button
+                      className="button button--primary"
+                      type="button"
+                      onClick={handleSwitchNetwork}
+                    >
+                      Switch to Monad testnet
+                    </button>
                   ) : null}
                 </div>
 
@@ -1110,10 +2668,17 @@ export function RandomnessDemo() {
                     }`}
                     type="button"
                     onClick={handleDeploy}
-                    disabled={!account || busy}
+                    disabled={
+                      !account ||
+                      !isMonadChain ||
+                      busy ||
+                      Boolean(pendingDeployment)
+                    }
                   >
                     {flowState === "deploying"
                       ? "Deploying…"
+                      : pendingDeployment
+                        ? "Deployment submitted · check transaction"
                       : "Deploy zero-price demo"}
                   </button>
                   <span>or use an existing instance</span>
@@ -1126,6 +2691,7 @@ export function RandomnessDemo() {
                         onChange={(event) => setContractInput(event.target.value)}
                         placeholder="0x…"
                         autoComplete="off"
+                        disabled={busy}
                       />
                       <button
                         className="button button--secondary"
@@ -1149,7 +2715,7 @@ export function RandomnessDemo() {
                       {activeContract}
                     </a>
                     <CopyButton value={activeContract} />
-                    {deploymentHash ? (
+                    {deploymentHash && !pendingDeployment ? (
                       <a
                         href={transactionExplorerUrl(deploymentHash)}
                         target="_blank"
@@ -1180,10 +2746,19 @@ export function RandomnessDemo() {
                   className="button button--primary button--wide"
                   type="button"
                   onClick={handleRequest}
-                  disabled={!account || !activeContract || busy || Boolean(request)}
+                  disabled={
+                    !account ||
+                    !isMonadChain ||
+                    !activeContract ||
+                    busy ||
+                    Boolean(pendingRequest) ||
+                    Boolean(request)
+                  }
                 >
                   {flowState === "requesting"
                     ? "Confirming Tx1…"
+                    : pendingRequest
+                      ? "Tx1 submitted · check transaction"
                     : request
                       ? `Request #${requestId?.toString() ?? "—"} locked`
                       : "Submit Tx1 · Lock request"}
@@ -1220,9 +2795,11 @@ export function RandomnessDemo() {
                     </p>
                   </div>
                   <span>
-                    {readiness?.phase === "permissionless"
-                      ? "Anyone may rescue"
-                      : "Requester first"}
+                    {browserProofCutoff
+                      ? "Demo safety stop"
+                      : readiness?.phase === "permissionless"
+                        ? "Anyone may rescue"
+                        : "Requester first"}
                   </span>
                 </div>
 
@@ -1231,10 +2808,17 @@ export function RandomnessDemo() {
                     className="button button--danger button--wide"
                     type="button"
                     onClick={handleExpire}
-                    disabled={!account || busy}
+                    disabled={
+                      !account ||
+                      !isMonadChain ||
+                      busy ||
+                      Boolean(pendingExpiry)
+                    }
                   >
                     {flowState === "expiring"
                       ? "Marking expired…"
+                      : pendingExpiry
+                        ? "Expiry submitted · check transaction"
                       : "Mark expired · no refund or reward"}
                   </button>
                 ) : (
@@ -1246,9 +2830,13 @@ export function RandomnessDemo() {
                   >
                     {flowState === "finalizing"
                       ? "Fetching 3 headers + confirming Tx2…"
-                      : flowState === "rescue-ready"
-                        ? "Rescue Tx2 · Store original requester's result"
-                        : "Submit Tx2 · Store result"}
+                      : pendingFinalization
+                        ? "Tx2 submitted · check transaction"
+                      : flowState === "safety-cutoff"
+                        ? "Demo Tx2 closed · proof still valid on-chain"
+                        : flowState === "rescue-ready"
+                          ? "Rescue Tx2 · Store original requester's result"
+                          : "Submit Tx2 · Store result"}
                   </button>
                 )}
 
@@ -1278,7 +2866,16 @@ export function RandomnessDemo() {
                         Requester window{" "}
                         <b>{formatBlock(readiness.requesterFinalizationBlock)}</b>
                         {" · "}rescue <b>{formatBlock(readiness.permissionlessRescueBlock)}</b>
-                        {" · "}last proof <b>{formatBlock(readiness.lastProofValidBlock)}</b>
+                        {" · "}demo cutoff{" "}
+                        <b>
+                          {formatBlock(
+                            proofSafetyCutoffBlock(
+                              readiness.lastProofValidBlock,
+                            ),
+                          )}
+                        </b>
+                        {" · "}last on-chain proof{" "}
+                        <b>{formatBlock(readiness.lastProofValidBlock)}</b>
                       </>
                     ) : (
                       "Readiness appears after Tx1."
@@ -1287,6 +2884,14 @@ export function RandomnessDemo() {
                   {estimatedSeconds > 0 ? (
                     <small>
                       Rough estimate: ~{estimatedSeconds}s. Network timing varies.
+                    </small>
+                  ) : null}
+                  {readiness ? (
+                    <small>
+                      The demo closes Tx2 64 blocks early for wallet approval and
+                      inclusion time. On-chain proof remains valid through exact block{" "}
+                      {formatBlock(readiness.lastProofValidBlock)}. T+64 opens rescue;
+                      it is not proof expiry.
                     </small>
                   ) : null}
                 </div>
@@ -1300,7 +2905,7 @@ export function RandomnessDemo() {
             result={activeResult}
             tx1Hash={tx1Hash ?? activeReference?.tx1Hash}
             tx2Hash={tx2Hash ?? activeReference?.tx2Hash}
-            expiryHash={expiryHash}
+            expiryHash={expiryHash ?? activeReference?.expiryHash}
           />
         </div>
 
@@ -1366,7 +2971,8 @@ export function RandomnessDemo() {
           <p className="eyebrow">Read-only · wallet optional</p>
           <h2>Result explorer</h2>
           <p>
-            Enter a compatible platform and request ID. All authoritative data
+            Enter an exact published PlatformRandomness address and request ID.
+            Its runtime bytecode hash is verified, and all authoritative data
             comes directly from Monad; this page uses no indexer or application
             server.
           </p>
@@ -1380,6 +2986,7 @@ export function RandomnessDemo() {
               onChange={(event) => setExplorerContract(event.target.value)}
               placeholder="0x…"
               autoComplete="off"
+              disabled={busy}
             />
           </label>
           <label htmlFor="explorer-request">
@@ -1390,12 +2997,13 @@ export function RandomnessDemo() {
               onChange={(event) => setExplorerRequestId(event.target.value)}
               placeholder="1"
               inputMode="numeric"
+              disabled={busy}
             />
           </label>
           <button
             className="button button--lime"
             type="submit"
-            disabled={explorerLoading}
+            disabled={explorerLoading || busy}
           >
             {explorerLoading ? "Reading Monad…" : "Verify result"}
           </button>
@@ -1428,6 +3036,7 @@ export function RandomnessDemo() {
                 className="button button--secondary"
                 type="button"
                 onClick={handleLoadIntoWorkspace}
+                disabled={busy}
               >
                 Load into Tx2 workspace
               </button>
@@ -1438,6 +3047,7 @@ export function RandomnessDemo() {
               result={explorerResult}
               tx1Hash={explorerReference?.tx1Hash}
               tx2Hash={explorerReference?.tx2Hash}
+              expiryHash={explorerReference?.expiryHash}
             />
           </>
         ) : (

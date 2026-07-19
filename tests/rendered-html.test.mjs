@@ -13,7 +13,11 @@ async function render() {
 
   return worker.fetch(
     new Request("http://localhost/", {
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        "x-forwarded-host": "localhost",
+        "x-forwarded-proto": "http",
+      },
     }),
     {
       ASSETS: {
@@ -56,6 +60,14 @@ test("server-renders the complete Monad RND public-good landing page", async () 
   assert.match(html, /Requester/);
   assert.match(html, /Finalizer/);
   assert.match(html, /1–100 draw/);
+  assert.match(
+    html,
+    /<meta(?=[^>]*property="og:image")(?=[^>]*content="http:\/\/localhost\/og\.png")[^>]*>/i,
+  );
+  assert.match(
+    html,
+    /<meta(?=[^>]*name="twitter:card")(?=[^>]*content="summary_large_image")[^>]*>/i,
+  );
 
   assert.doesNotMatch(html, developmentPreviewMeta);
   assert.doesNotMatch(html, /Your site is taking shape|Codex is working/i);
@@ -158,14 +170,18 @@ test("prefills the wallet-free explorer with the newest locally saved Monad requ
   assert.match(demo, /Read on-chain to verify its current status/);
 });
 
-test("publishes product metadata and a dedicated Monad RND favicon", async () => {
-  const [favicon, layout] = await Promise.all([
+test("publishes product metadata, social preview, and a dedicated favicon", async () => {
+  const [favicon, layout, socialCard] = await Promise.all([
     readFile(new URL("../public/favicon.svg", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../public/og.png", import.meta.url)),
   ]);
 
   assert.match(layout, /lang="en"/);
   assert.match(layout, /Public randomness infrastructure with zero protocol fees/);
+  assert.match(layout, /await headers\(\)/);
+  assert.match(layout, /new URL\("\/og\.png", origin\)/);
+  assert.ok(socialCard.byteLength > 100_000);
   assert.match(favicon, /aria-label="Monad RND"/);
   assert.match(favicon, /#836EF9/i);
   assert.match(favicon, /#C8FF65/i);

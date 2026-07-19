@@ -45,6 +45,7 @@ export type RandomnessErrorCode =
   | "PROOF_EXPIRED"
   | "DUPLICATE_STATE"
   | "CONTRACT_NOT_FOUND"
+  | "INCOMPATIBLE_CONTRACT"
   | "INVALID_ADDRESS"
   | "INVALID_TRANSACTION_HASH"
   | "INVALID_ARTIFACT"
@@ -56,6 +57,7 @@ export type RandomnessErrorCode =
   | "GAS_ESTIMATION_FAILED"
   | "GAS_LIMIT_EXCEEDED"
   | "TRANSACTION_REVERTED"
+  | "TRANSACTION_REPLACED"
   | "UNKNOWN";
 
 export class RandomnessClientError extends Error {
@@ -81,6 +83,7 @@ const ERROR_MESSAGES: Record<RandomnessErrorCode, string> = {
   PROOF_EXPIRED: "블록 증명 보관 기간이 지나 Tx2를 실행할 수 없어요.",
   DUPLICATE_STATE: "이미 확정되거나 만료된 요청이에요.",
   CONTRACT_NOT_FOUND: "해당 주소에서 배포된 컨트랙트를 찾지 못했어요.",
+  INCOMPATIBLE_CONTRACT: "공식 PlatformRandomness 컨트랙트와 일치하지 않는 주소예요.",
   INVALID_ADDRESS: "올바른 EVM 컨트랙트 주소를 입력해 주세요.",
   INVALID_TRANSACTION_HASH: "올바른 거래 해시가 아니에요.",
   INVALID_ARTIFACT: "배포용 컨트랙트 파일을 불러오지 못했어요.",
@@ -92,6 +95,8 @@ const ERROR_MESSAGES: Record<RandomnessErrorCode, string> = {
   GAS_ESTIMATION_FAILED: "안전한 가스 한도를 계산하지 못해 거래를 열지 않았어요.",
   GAS_LIMIT_EXCEEDED: "예상 가스가 이 작업의 안전 한도를 초과했어요.",
   TRANSACTION_REVERTED: "거래가 체인에서 실패했어요.",
+  TRANSACTION_REPLACED:
+    "제출한 거래가 취소되었거나 다른 거래로 교체되었어요. 같은 작업을 다시 제출해도 안전해요.",
   UNKNOWN: "요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
 };
 
