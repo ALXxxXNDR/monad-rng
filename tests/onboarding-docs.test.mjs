@@ -18,7 +18,7 @@ const mandatoryFlowSentence =
 
 test("publisher copies every onboarding guide byte for byte", async () => {
   const outputDirectory = await mkdtemp(
-    join(tmpdir(), "monad-rnd-onboarding-docs-"),
+    join(tmpdir(), "monad-rng-onboarding-docs-"),
   );
 
   try {
@@ -62,6 +62,20 @@ test("every canonical guide states the exact mandatory Tx1 and Tx2 flow", async 
       assert.ok(
         guide.includes(mandatoryFlowSentence),
         `${file} must state the mandatory flow exactly`,
+      );
+    }),
+  );
+});
+
+test("every canonical onboarding guide uses the Monad RNG brand", async () => {
+  await Promise.all(
+    ["contract-integration.md", ...publishedGuideFiles].map(async (file) => {
+      const guide = await read(`docs/${file}`);
+      assert.match(guide, /Monad RNG/, `${file} must name Monad RNG`);
+      assert.doesNotMatch(
+        guide,
+        /Monad RND/,
+        `${file} must not expose the retired Monad RND brand`,
       );
     }),
   );

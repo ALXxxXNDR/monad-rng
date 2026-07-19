@@ -1,6 +1,6 @@
-# Monad RND contract integration
+# Monad RNG contract integration
 
-Monad RND is an MIT-licensed, zero-protocol-fee public good. Each integrating
+Monad RNG is an MIT-licensed, zero-protocol-fee public good. Each integrating
 platform deploys its own `PlatformRandomness` instance, chooses its own request
 price, and owns all revenue held by that instance.
 

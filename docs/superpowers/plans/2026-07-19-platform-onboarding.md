@@ -1,4 +1,4 @@
-# Monad RND Platform Onboarding Implementation Plan
+# Monad RNG Platform Onboarding Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -152,7 +152,7 @@ Expected: 2 tests pass.
 
 ```bash
 git add docs/production-readiness.md docs/integration-guide.md tests/onboarding-docs.test.mjs
-git commit -m "docs: add RND readiness and integration guides"
+git commit -m "docs: add RNG readiness and integration guides"
 ```
 
 ---
@@ -317,7 +317,7 @@ async function render(pathname = "/") {
 Add assertions to the landing test for an `/integrate` navigation link and hero CTA. Add a new test that renders `/integrate` and asserts:
 
 ```js
-assert.match(html, /Integrate Monad RND/i);
+assert.match(html, /Integrate Monad RNG/i);
 assert.match(html, /Tx1 locks the request/i);
 assert.match(html, /Tx2 finalizes and permanently stores/i);
 assert.match(html, /production-readiness\\.md/);
@@ -377,7 +377,7 @@ Build a server-rendered page in the existing design language with:
 - a header linking the wordmark back to `/`;
 - a `Run demo` link to `/#demo`;
 - an opening eyebrow `Platform onboarding`;
-- H1 `Integrate Monad RND`;
+- H1 `Integrate Monad RNG`;
 - an above-the-fold warning card containing the exact mandatory Tx1+Tx2 sentence;
 - a four-step flow: Tx1 lock, wait for targets, Tx2 finalize, settle from stored result;
 - four role-based guide cards linking to `/docs/<filename>`;
@@ -456,7 +456,7 @@ git commit -m "feat: publish platform integration hub"
 Generate one landscape card using the existing black-grid, Monad-purple, and lime visual system. Required visible text:
 
 ```text
-Monad RND
+Monad RNG
 Tx1 locks. Tx2 finalizes.
 Public randomness infrastructure for Monad builders
 ```
@@ -502,7 +502,7 @@ Resolve all Critical and Important findings and rerun their covering tests.
 
 ```bash
 git add public/og.png app/layout.tsx
-git commit -m "chore: refresh Monad RND social preview"
+git commit -m "chore: refresh Monad RNG social preview"
 ```
 
 If `app/layout.tsx` did not change, commit only `public/og.png`.

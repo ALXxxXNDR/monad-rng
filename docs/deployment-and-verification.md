@@ -1,4 +1,4 @@
-# Monad RND deployment and verification
+# Monad RNG deployment and verification
 
 > Tx1 locks the request; Tx2 finalizes and permanently stores the random result. A production integration must operate both as one flow.
 

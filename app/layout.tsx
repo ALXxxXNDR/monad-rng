@@ -14,14 +14,14 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const SITE_TITLE = "Monad RND · Public randomness for Monad";
+const SITE_TITLE = "Monad RNG · Public randomness for Monad";
 const SITE_DESCRIPTION =
   "Public randomness infrastructure with zero protocol fees: one primitive flow locks the request through Tx1, then finalizes and permanently stores the result through Tx2.";
 
 const sharedMetadata: Metadata = {
   title: SITE_TITLE,
   description: SITE_DESCRIPTION,
-  applicationName: "Monad RND",
+  applicationName: "Monad RNG",
   keywords: [
     "Monad",
     "randomness",
@@ -77,15 +77,15 @@ export async function generateMetadata(): Promise<Metadata> {
     openGraph: {
       type: "website",
       url: origin,
-      siteName: "Monad RND",
+      siteName: "Monad RNG",
       title: SITE_TITLE,
       description: SITE_DESCRIPTION,
       images: [
         {
           url: socialImage,
-          width: 1_721,
-          height: 914,
-          alt: "Monad RND public randomness for Monad",
+          width: 1_672,
+          height: 941,
+          alt: "Monad RNG public randomness for Monad",
         },
       ],
     },

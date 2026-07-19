@@ -408,7 +408,7 @@ export async function deployDemoPlatform({
   walletClient,
   publicClient,
   owner,
-  platformName = "Monad RND personal demo",
+  platformName = "Monad RNG personal demo",
   maxPending = DEFAULT_DEMO_MAX_PENDING,
   artifact,
   fetchImpl,
@@ -435,7 +435,7 @@ export async function deployDemoPlatform({
     const account = getAddress(owner);
     const constructorArgs = [
       account,
-      platformName.trim() || "Monad RND personal demo",
+      platformName.trim() || "Monad RNG personal demo",
       BIGINT_ZERO,
       maxPending,
     ] as const;

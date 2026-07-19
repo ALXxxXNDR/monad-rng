@@ -31,14 +31,15 @@ async function render(pathname = "/") {
   );
 }
 
-test("server-renders the complete Monad RND public-good landing page", async () => {
+test("server-renders the complete Monad RNG public-good landing page", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Monad RND · Public randomness for Monad<\/title>/i);
-  assert.match(html, /Monad RND/);
+  assert.match(html, /<title>Monad RNG · Public randomness for Monad<\/title>/i);
+  assert.match(html, /Monad RNG/);
+  assert.doesNotMatch(html, /Monad RND/);
   assert.match(html, /Connect wallet/);
   assert.match(html, /Tx1 · Lock request/);
   assert.match(html, /Tx2 · Store result/);
@@ -102,11 +103,11 @@ test("server-renders the platform integration hub", async () => {
   );
   assert.match(
     html,
-    /<title>Integrate Monad RND · Platform onboarding<\/title>/i,
+    /<title>Integrate Monad RNG · Platform onboarding<\/title>/i,
   );
   assert.match(
     html,
-    /<meta(?=[^>]*name="description")(?=[^>]*content="Plan a production Monad RND integration where Tx1 locks the request and Tx2 finalizes and permanently stores the result as one operated flow\.")[^>]*>/i,
+    /<meta(?=[^>]*name="description")(?=[^>]*content="Plan a production Monad RNG integration where Tx1 locks the request and Tx2 finalizes and permanently stores the result as one operated flow\.")[^>]*>/i,
   );
   assert.match(
     html,
@@ -117,7 +118,8 @@ test("server-renders the platform integration hub", async () => {
     /<meta(?=[^>]*name="twitter:card")(?=[^>]*content="summary_large_image")[^>]*>/i,
   );
 
-  assert.match(html, /Integrate Monad RND/i);
+  assert.match(html, /Integrate Monad RNG/i);
+  assert.doesNotMatch(html, /Monad RND/);
   assert.match(
     html,
     /Tx1 locks the request;\s*Tx2 finalizes and permanently stores the random\s*result\. A production integration must operate both as one flow\./i,
@@ -209,7 +211,7 @@ test("ships real wallet flows and removes the disposable starter preview", async
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(page, /<RandomnessDemo \/>/);
-  assert.match(layout, /Monad RND · Public randomness for Monad/);
+  assert.match(layout, /Monad RNG · Public randomness for Monad/);
   assert.doesNotMatch(page + layout, /codex-preview|SkeletonPreview|Starter Project/);
 
   for (const operation of [
@@ -293,19 +295,26 @@ test("prefills the wallet-free explorer with the newest locally saved Monad requ
   assert.match(demo, /Read on-chain to verify its current status/);
 });
 
-test("publishes product metadata, social preview, and a dedicated favicon", async () => {
-  const [favicon, layout, socialCard] = await Promise.all([
+test("publishes product metadata, matching RNG social images, and a dedicated favicon", async () => {
+  const [favicon, layout, socialCard, submissionCover] = await Promise.all([
     readFile(new URL("../public/favicon.svg", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../public/og.png", import.meta.url)),
+    readFile(new URL("../public/submission-cover.png", import.meta.url)),
   ]);
 
   assert.match(layout, /lang="en"/);
   assert.match(layout, /Public randomness infrastructure with zero protocol fees/);
   assert.match(layout, /await headers\(\)/);
   assert.match(layout, /new URL\("\/og\.png", origin\)/);
+  assert.match(layout, /width:\s*1_672/);
+  assert.match(layout, /height:\s*941/);
   assert.ok(socialCard.byteLength > 100_000);
-  assert.match(favicon, /aria-label="Monad RND"/);
+  assert.deepEqual(submissionCover, socialCard);
+  assert.equal(socialCard.subarray(1, 4).toString("ascii"), "PNG");
+  assert.equal(socialCard.readUInt32BE(16), 1_672);
+  assert.equal(socialCard.readUInt32BE(20), 941);
+  assert.match(favicon, /aria-label="Monad RNG"/);
   assert.match(favicon, /#836EF9/i);
   assert.match(favicon, /#C8FF65/i);
   assert.doesNotMatch(favicon, /#68C4FF|#0C79D8|#2E9EFF/i);

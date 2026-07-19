@@ -1,4 +1,4 @@
-# Monad RND production readiness
+# Monad RNG production readiness
 
 ## The rule you cannot skip: Tx1 + Tx2
 
@@ -81,7 +81,7 @@ exposure is above the integration's approved value ceiling.
 
 ## Cost and responsibility
 
-`protocolFee()` is permanently `0`. That means Monad RND takes no protocol fee;
+`protocolFee()` is permanently `0`. That means Monad RNG takes no protocol fee;
 it does **not** mean transactions are gasless.
 
 | Cost or balance | Who is responsible |

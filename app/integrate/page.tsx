@@ -1,9 +1,9 @@
 import type { Metadata, ResolvingMetadata } from "next";
 import Link from "next/link";
 
-const INTEGRATE_TITLE = "Integrate Monad RND · Platform onboarding";
+const INTEGRATE_TITLE = "Integrate Monad RNG · Platform onboarding";
 const INTEGRATE_DESCRIPTION =
-  "Plan a production Monad RND integration where Tx1 locks the request and Tx2 finalizes and permanently stores the result as one operated flow.";
+  "Plan a production Monad RNG integration where Tx1 locks the request and Tx2 finalizes and permanently stores the result as one operated flow.";
 
 export async function generateMetadata(
   _props: Record<string, never>,
@@ -23,7 +23,7 @@ export async function generateMetadata(
     openGraph: {
       type: "website",
       url: integrateUrl,
-      siteName: parentMetadata.openGraph?.siteName ?? "Monad RND",
+      siteName: parentMetadata.openGraph?.siteName ?? "Monad RNG",
       title: INTEGRATE_TITLE,
       description: INTEGRATE_DESCRIPTION,
       images: parentMetadata.openGraph?.images ?? undefined,
@@ -105,11 +105,11 @@ export default function IntegratePage() {
   return (
     <main className="integrate-page">
       <header className="site-header integrate-header">
-        <Link className="wordmark" href="/" aria-label="Monad RND home">
+        <Link className="wordmark" href="/" aria-label="Monad RNG home">
           <span className="wordmark-mark" aria-hidden="true">
             M
           </span>
-          <span>Monad RND</span>
+          <span>Monad RNG</span>
           <small>Platform guide</small>
         </Link>
         <Link
@@ -123,7 +123,7 @@ export default function IntegratePage() {
       <section className="integrate-hero" aria-labelledby="integrate-title">
         <div className="integrate-hero-copy">
           <p className="eyebrow">Platform onboarding</p>
-          <h1 id="integrate-title">Integrate Monad RND</h1>
+          <h1 id="integrate-title">Integrate Monad RNG</h1>
           <p className="integrate-lede">
             Start with the product boundary, choose who the contract records as
             requester, then build finalization and permanent settlement as one
@@ -301,7 +301,7 @@ export default function IntegratePage() {
         </div>
         <div className="integrate-table-wrap">
           <table className="integrate-lifecycle-table">
-            <caption>Monad RND request lifecycle by block number</caption>
+            <caption>Monad RNG request lifecycle by block number</caption>
             <thead>
               <tr>
                 <th scope="col">Block</th>
@@ -410,11 +410,11 @@ export default function IntegratePage() {
       </section>
 
       <footer className="integrate-footer">
-        <Link className="wordmark" href="/" aria-label="Back to Monad RND home">
+        <Link className="wordmark" href="/" aria-label="Back to Monad RNG home">
           <span className="wordmark-mark" aria-hidden="true">
             M
           </span>
-          <span>Monad RND</span>
+          <span>Monad RNG</span>
         </Link>
         <p>Authenticated multi-block proposer entropy. Not a cryptographic VRF.</p>
         <Link href="/">Back to home →</Link>

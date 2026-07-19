@@ -1,6 +1,6 @@
-# Monad RND
+# Monad RNG
 
-Monad RND is an open-source, zero-protocol-fee randomness building block for
+Monad RNG is an open-source, zero-protocol-fee randomness building block for
 Monad applications. It uses three authenticated future Monad block headers,
 stores the result permanently after Tx2, and keeps every integrating platform
 in its own isolated contract.
@@ -48,7 +48,7 @@ Read the guides in role order:
 1. Install an injected EVM wallet such as MetaMask.
 2. Add or switch to **Monad Testnet**. Its chain ID is `10143`.
 3. Get test MON from the [official faucet](https://faucet.monad.xyz).
-4. Open Monad RND and connect the wallet.
+4. Open Monad RNG and connect the wallet.
 5. Deploy a personal isolated demo contract. Its request price is `0`; the
    deploying wallet still pays deployment gas.
 6. Press **Tx1 — request randomness**. Tx1 permanently fixes the requester and
@@ -205,7 +205,7 @@ caller to pay gas.
 
 Current Monad documentation lists a 200 million block gas limit and a 30
 million per-transaction gas limit. Those are network ceilings, not estimates
-of what Monad RND calls will consume.
+of what Monad RNG calls will consume.
 
 The platform request price is separate from gas. It is set by the platform,
 paid exactly in Tx1, retained by that platform contract, and withdrawable only

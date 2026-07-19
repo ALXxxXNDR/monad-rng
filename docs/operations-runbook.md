@@ -1,4 +1,4 @@
-# Monad RND operations runbook
+# Monad RNG operations runbook
 
 ## Operating promise
 

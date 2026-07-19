@@ -1,4 +1,4 @@
-# Monad RND integration guide
+# Monad RNG integration guide
 
 ## Integration outcome
 

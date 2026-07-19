@@ -180,7 +180,7 @@ an application contract.
 
 ## Landing page
 
-The single-page product is named **Monad RND** and uses a dark, high-contrast
+The single-page product is named **Monad RNG** and uses a dark, high-contrast
 Monad-purple visual system with restrained motion and no decorative stock
 imagery.
 

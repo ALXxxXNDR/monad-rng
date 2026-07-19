@@ -2424,11 +2424,11 @@ export function RandomnessDemo() {
   return (
     <main>
       <header className="site-header">
-        <a className="wordmark" href="#top" aria-label="Monad RND home">
+        <a className="wordmark" href="#top" aria-label="Monad RNG home">
           <span className="wordmark-mark" aria-hidden="true">
             M
           </span>
-          <span>Monad RND</span>
+          <span>Monad RNG</span>
           <small>Public good · v1</small>
         </a>
         <nav aria-label="Primary navigation">
@@ -3109,7 +3109,7 @@ export function RandomnessDemo() {
           <span className="wordmark-mark" aria-hidden="true">
             M
           </span>
-          <span>Monad RND</span>
+          <span>Monad RNG</span>
         </a>
         <p>
           Open-source authenticated block entropy. Not a cryptographic VRF.

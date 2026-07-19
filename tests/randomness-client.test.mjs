@@ -76,6 +76,10 @@ const OFFICIAL_RUNTIME_BYTECODE = artifact.runtimeBytecode;
 const OFFICIAL_RUNTIME_HASH =
   "0x9b6bf6ae53e215ac89420c58ede612b423963c8876e5bfdf8df8b6db59d1c4ce";
 
+test("RNG branding keeps the legacy browser state namespace recoverable", () => {
+  assert.equal(LOCAL_STATE_KEY, "monad-rnd:state:v1");
+});
+
 function artifactFetch(calls = []) {
   return async (url, options) => {
     calls.push({ url: String(url), options });

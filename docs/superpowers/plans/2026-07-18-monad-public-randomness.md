@@ -348,7 +348,7 @@ git commit -m "feat: add backend-free Monad wallet client"
 
 - [ ] **Step 1: Replace starter assertions with failing product assertions**
 
-Require rendered HTML to include `Monad RND`, `Connect wallet`, `Tx1 · Lock
+Require rendered HTML to include `Monad RNG`, `Connect wallet`, `Tx1 · Lock
 request`, `Tx2 · Store result`, `Result explorer`, `Protocol fee · 0`, and the
 non-VRF disclosure. Assert starter metadata and `react-loading-skeleton` are
 absent.
@@ -391,7 +391,7 @@ Expected: rendered tests pass, build succeeds, and lint reports zero errors.
 
 ```bash
 git add app public package.json package-lock.json tests
-git commit -m "feat: launch Monad RND interactive landing page"
+git commit -m "feat: launch Monad RNG interactive landing page"
 ```
 
 ### Task 6: Live integration, security review, and Sites deployment
@@ -443,7 +443,7 @@ visible non-VRF disclosure, and successful public result lookup.
 
 ```bash
 git add .
-git commit -m "chore: verify Monad RND release"
+git commit -m "chore: verify Monad RNG release"
 ```
 
 - [ ] **Step 5: Publish through Sites**

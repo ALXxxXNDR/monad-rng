@@ -1,7 +1,10 @@
 import { getAddress } from "viem";
 import type { Address, Hash } from "viem";
 
-export const LOCAL_STATE_KEY = "monad-rnd:state:v1";
+// Keep the original browser namespace frozen so existing deployments, pending
+// transactions, and older open tabs remain recoverable after the RNG rename.
+const LEGACY_BROWSER_NAMESPACE = "monad-rnd";
+export const LOCAL_STATE_KEY = `${LEGACY_BROWSER_NAMESPACE}:state:v1`;
 const MAX_RECENT_REQUESTS = 20;
 export const MAX_PENDING_TRANSACTIONS = 20;
 
@@ -339,7 +342,7 @@ function pendingMatchesWriteAction(
 }
 
 function pendingWriteLockName(action: PendingWriteAction): string {
-  const prefix = `monad-rnd:write:v1:${action.chainId}:${action.kind}`;
+  const prefix = `${LEGACY_BROWSER_NAMESPACE}:write:v1:${action.chainId}:${action.kind}`;
   if (action.kind === "deployment") return prefix;
   if (action.kind === "request") {
     return `${prefix}:${action.contractAddress.toLowerCase()}:${action.requester.toLowerCase()}`;
@@ -527,7 +530,7 @@ export type PendingWriteLockResult<T> =
   | { status: "pending"; pending: StoredPendingTransaction }
   | { status: "unavailable" };
 
-const STORED_STATE_MUTATION_LOCK_NAME = "monad-rnd:state-mutation:v1";
+const STORED_STATE_MUTATION_LOCK_NAME = `${LEGACY_BROWSER_NAMESPACE}:state-mutation:v1`;
 
 export async function runWithStoredStateMutationLock<T>({
   lockManager,

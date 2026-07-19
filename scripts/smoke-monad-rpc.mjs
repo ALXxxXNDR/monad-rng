@@ -2,7 +2,7 @@ import { fromRlp, keccak256 } from "viem";
 
 const RPC_URL = "https://testnet-rpc.monad.xyz";
 const CHAIN_ID = 10_143n;
-const BROWSER_ORIGIN = "https://monad-rnd.example";
+const BROWSER_ORIGIN = "https://monad-rng.example";
 const HISTORY_STORAGE = "0x0000F90827F1C53a10cb7A02335B175320002935";
 const HISTORICAL_AGE = 300n;
 const REQUEST_TIMEOUT_MS = 15_000;
