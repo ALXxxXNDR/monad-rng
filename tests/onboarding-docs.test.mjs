@@ -182,6 +182,14 @@ test("the Testnet manifest stays consistent with artifacts, docs, and the post-c
   assert.equal(manifest.platform.maxPending, "0");
   assert.equal(manifest.platform.ownerless, true);
   assert.equal(manifest.factory.ownerless, true);
+  assert.equal(
+    manifest.attestation.sourceVerification.platform.status,
+    "exact_match",
+  );
+  assert.equal(
+    manifest.attestation.sourceVerification.factory.status,
+    "exact_match",
+  );
   assert.equal(manifest.canary.pendingCountAfterTests, "0");
   assert.ok(
     manifest.attestation.commonFinalizedBlock >

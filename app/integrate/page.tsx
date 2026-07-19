@@ -172,9 +172,9 @@ export default function IntegratePage() {
           <h2 id="deployment-title">Start from the attested contracts.</h2>
           <p>
             Both contracts are live on Monad Testnet chain 10143, ownerless,
-            frozen, and tested through real Tx1 and Tx2 flows. The public
-            canary is free; the Factory creates a separately configured
-            instance for each platform.
+            frozen, source-verified with an exact match, and tested through
+            real Tx1 and Tx2 flows. The public canary is free; the Factory
+            creates a separately configured instance for each platform.
           </p>
         </div>
         <div className="integrate-deployment-grid">

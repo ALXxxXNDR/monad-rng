@@ -42,7 +42,20 @@
     "commonFinalizedBlock": 46293609,
     "commonFinalizedBlockHash": "0x3deb833eb9b1c26d0ce100abcbecb528a7674eaa19d0b3df90b380c032f90552",
     "result": "passed",
-    "sourceVerification": "not claimed"
+    "sourceVerification": {
+      "verifier": "Sourcify",
+      "verifierUrl": "https://sourcify-api-monad.blockvision.org/",
+      "factory": {
+        "status": "exact_match",
+        "jobId": "bda22768-ba6f-40cc-a94e-b07556c5aa63",
+        "explorerUrl": "https://testnet.monadvision.com/address/0x75E6458DaA0c6152419e4617dcf4D459149C1530"
+      },
+      "platform": {
+        "status": "exact_match",
+        "jobId": "83324524-42e0-4839-837e-27b65bcd284f",
+        "explorerUrl": "https://testnet.monadvision.com/address/0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1"
+      }
+    }
   },
   "canary": {
     "requesterFinalization": {

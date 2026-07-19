@@ -45,8 +45,14 @@ result. A new design requires a new contract address.
 Two independently operated RPCs agreed at finalized block `46293609`. The
 automated attestation matched both runtime bytecodes, deployment receipts,
 Factory event, deployer, frozen settings, versions, zero protocol fee, and the
-exact ownerless ABI. This is bytecode attestation; it does not claim that the
-explorer has independently verified the source.
+exact ownerless ABI. This bytecode attestation is separate from explorer source
+verification.
+
+Sourcify also returned `exact_match` for both contracts using the release
+compiler settings and the Platform's frozen constructor arguments:
+
+- [Verified Platform source on MonadVision](https://testnet.monadvision.com/address/0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1)
+- [Verified Factory source on MonadVision](https://testnet.monadvision.com/address/0x75E6458DaA0c6152419e4617dcf4D459149C1530)
 
 ## Live Tx1 and Tx2 evidence
 
