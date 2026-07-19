@@ -21,6 +21,14 @@
 # misc
 .DS_Store
 *.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+keystore*.json
+.npmrc
+.netrc
 
 # debug
 npm-debug.log*
@@ -48,3 +56,5 @@ next-env.d.ts
 # foundry
 /cache/
 /contracts/out/
+/broadcast/
+/contracts/broadcast/

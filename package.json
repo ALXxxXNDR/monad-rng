@@ -2,6 +2,16 @@
   "name": "monad-rng",
   "version": "0.1.0",
   "private": true,
+  "description": "Open-source, zero-protocol-fee authenticated block randomness for Monad builders.",
+  "license": "MIT",
+  "homepage": "https://monad-rng.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ALXxxXNDR/monad-rng.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ALXxxXNDR/monad-rng/issues"
+  },
   "imports": {
     "#monad-network": "./app/lib/network.ts"
   },
