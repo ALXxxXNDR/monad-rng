@@ -14,6 +14,16 @@ caller or service. Permissionless rescue is not automatic. Each sender needs
 Monad gas, and the protocol supplies no keeper reward, relayer, treasury, or
 refund.
 
+No always-on application server is required. A browser, script, serverless
+task, community caller, or keeper can submit the transactions. Whatever model
+you choose still needs monitoring, a funded caller, and a durable record; the
+contract cannot schedule its own Tx2.
+
+V1 has no owner, admin, pause, upgrade, or configuration setter. Its
+`revenueRecipient`, `platformName`, `requestPrice`, and `maxPending` are fixed
+forever. Operational controls therefore live in the integrating application,
+allowlist, wrapper, and transaction workers.
+
 For every write, persist the business-action ID, chain, contract, function and
 calldata hash, sender, nonce, original hash, replacement hashes, receipts,
 events, finalized observation, and operator decision. Use a durable
@@ -28,9 +38,10 @@ seconds, control every transition.
 1. Before Tx1, create one durable business-action record and irrevocably bind
    its payment, eligibility, inventory, and customer policy. Lock it so two
    workers cannot open two requests.
-2. Read the approved chain, platform address, pause state, price, and pending
-   capacity. Persist the intended Tx1 sender, nonce, value, destination, and
-   calldata hash before broadcast.
+2. Read the approved chain, platform address, fixed price, and pending
+   capacity. If `maxPending` is positive, confirm a slot is available.
+   Persist the intended Tx1 sender, nonce, value, destination, and calldata
+   hash before broadcast.
 3. After finalized inclusion, decode `RandomnessRequested` only from the
    approved platform receipt. Store its request ID, requester, `R`, target
    blocks `R+8`, `R+24`, `R+40`, and deadlines `R+42`, `R+104`, `R+8199`,
@@ -53,8 +64,9 @@ seconds, control every transition.
    runbook. Continue monitoring until `RandomnessFinalized` or
    `RandomnessRequestExpired`; never abandon it in a generic “pending” state.
 
-An owner pause blocks new Tx1 calls but does not block Tx2 or expiry for
-existing requests.
+If new intake must stop, disable it in every application and wrapper entry
+point. The V1 platform contract itself cannot be paused. Continue operating
+Tx2, rescue, reads, and expiry for existing requests.
 
 ## Requester-window finalization
 
@@ -100,7 +112,7 @@ Operate rescue as an assigned service:
 
 Rescue is permissionless, not automatic. The contract pays no rescue reward
 and reimburses no gas, so keepers need monitored balances and an explicit
-treasury owner.
+platform treasury assignment.
 
 ## Proof deadline and expiry
 
@@ -203,10 +215,10 @@ RPC failover procedure:
 6. Backfill events from the last trusted finalized checkpoint and reconcile
    every open request before declaring recovery.
 
-If no endpoint passes, stop or pause new product intake and preserve existing
-jobs. A contract owner may pause new platform Tx1 calls through a healthy RPC;
-that pause never blocks finalization or expiry, which remain the recovery
-priority.
+If no endpoint passes, stop new product intake in the application and preserve
+existing jobs. The contract cannot be paused, so also remove the V1 address
+from every frontend, wrapper, and automated request path. Finalization and
+expiry remain the recovery priority.
 
 ## Monitoring and alerts
 
@@ -219,8 +231,9 @@ At minimum, monitor:
   `R+8199`, and `R+8200`;
 - Tx1-to-Tx2 latency, requester-window success rate, rescue volume, expiry
   volume, and oldest open request;
-- on-chain `pendingCount / maxPending`, application queue depth, and blocked Tx1
-  calls;
+- on-chain `pendingCount / maxPending` when the cap is positive, application
+  queue depth, and blocked Tx1 calls; for unlimited mode, monitor absolute
+  pending growth;
 - requester and rescue signer balances versus the configured number of
   worst-case gas limits, with warning and critical thresholds;
 - RPC chain ID, finalized lag/hash agreement, latency, timeouts, error rate,
@@ -230,8 +243,8 @@ At minimum, monitor:
   nonce consumers, and unfinalized receipts;
 - indexer checkpoint block/hash, replay progress, duplicate/missing event
   checks, and reconciliation against `getRequest` and `pendingCount`;
-- `RequestPriceUpdated`, `MaxPendingUpdated`, `RequestsPausedUpdated`,
-  `OwnershipTransferred`, and `RevenueWithdrawn`; and
+- `RevenueWithdrawn`, unexpected balance accumulation, and any mismatch
+  between the approved frozen configuration and live reads; and
 - expired requests awaiting inventory release, accounting, customer contact,
   or compensation.
 
@@ -264,24 +277,40 @@ not an operating control.
 5. Reconcile any work that was delayed and adjust the threshold only through a
    reviewed capacity change.
 
+### Withdraw request revenue
+
+1. Read the approved contract address, fixed `revenueRecipient`, and balance
+   from the intended chain.
+2. Confirm the recipient can accept native MON. For a contract recipient,
+   simulate its receive path before relying on the sweep.
+3. Anyone may call `withdrawRevenue()`. Journal and simulate the exact call;
+   the caller pays gas and cannot select the amount or destination.
+4. Require a finalized successful receipt, check `RevenueWithdrawn`, and
+   reconcile the recipient balance and platform balance.
+5. If the transfer reverts, do not deploy a helper or use a different caller
+   expecting a different destination. The recipient is fixed; investigate its
+   receive behavior and treat an unrecoverable recipient as a V2 incident.
+
 ### Pending cap full
 
-1. Confirm `pendingCount`, `maxPending`, pause state, and open requests directly
-   on-chain; do not rely only on the index.
+This incident applies only when the fixed `maxPending` is positive.
+
+1. Confirm `pendingCount`, `maxPending`, and open requests directly on-chain;
+   do not rely only on the index.
 2. Stop accepting product actions that would create Tx1. Identify RPC failure,
    keeper failure, spam, or unmatched terminal events.
 3. Finalize eligible requests, rescue from `R+104`, and expire only at
    `R+8200` or later.
-4. Reconcile the event index and customer records. Raising `maxPending` hides
-   backlog and is not the first response.
-5. Only the approved owner may change price, cap, or pause state. Capacity
-   changes need a risk review, monitored keeper capacity, and a new manifest
-   configuration record.
+4. Reconcile the event index and customer records. The cap cannot be raised in
+   place, so do not wait for an admin transaction that does not exist.
+5. If the permanent cap no longer fits the product, deploy and verify V2 with a
+   newly reviewed cap, route only new requests to V2, and finish every V1
+   request at V1.
 
 ### Proof deadline near
 
 1. Trigger this runbook at the internal safety cutoff, not at `R+8199`.
-2. Escalate to the rescue owner, verify signer balance and healthy RPCs, fetch
+2. Escalate to the rescue lead, verify signer balance and healthy RPCs, fetch
    all three headers, simulate, and submit with enough blocks for inclusion and
    nonce reconciliation.
 3. Track the canonical inclusion block. Tx2 must succeed no later than
@@ -289,21 +318,29 @@ not an operating control.
 4. If no proof transaction was included by `R+8199`, stop Tx2 attempts. At
    `R+8200`, follow the expired-request procedure and customer policy.
 
-### Owner key compromise
+### Revenue recipient compromised or misconfigured
 
-1. Stop new product intake, page security and governance, and remove the
-   address from new-request configuration while facts are established.
-2. Inspect finalized ownership, price, cap, pause, and withdrawal events plus
-   current storage. Preserve evidence and do not trust a UI cache.
-3. If the approved owner still has safe control, transfer ownership to a new
-   reviewed multisig and pause new requests, using the incident signer process.
-4. If control is lost or an unauthorized owner/configuration is canonical,
-   reject the instance for new Tx1 and deploy a newly approved instance.
-5. Continue tracking existing requests. Owner controls cannot rewrite a stored
-   result, and pausing requests does not block Tx2 or expiry; rescue remains
-   permissionless from `R+104`.
-6. Reconcile balances, open requests, manifests, allowlists, customer impact,
-   and post-incident key controls before reopening.
+1. Stop new product intake, page security and product governance, and remove
+   V1 from new-request configuration while facts are established.
+2. Read the fixed `revenueRecipient`, price, cap, balance, requests, and
+   `RevenueWithdrawn` events directly on-chain. Preserve evidence.
+3. Do not attempt an ownership transfer, recipient setter, or pause; none
+   exists. The deployment wallet also has no recovery authority.
+4. Deploy and verify V2 with the correct recipient and route only new requests
+   to V2.
+5. Continue finalizing and expiring every existing V1 request. Random results
+   do not depend on the recipient and remain permanent at V1.
+6. Treat any V1 balance as recoverable only if the fixed recipient can receive
+   it. If the address is wrong or rejects MON, V1 has no recovery path.
+
+### Frozen configuration no longer fits
+
+1. Stop creating new V1 product actions at every controlled entry point.
+2. Record why the fixed name, price, cap, recipient, or code no longer fits.
+3. Build, test, deploy, and independently verify a new V2 address and manifest.
+4. Run the full V2 Tx1 + Tx2 canary before enabling new product value.
+5. Keep V1 workers and records active until every V1 request is finalized or
+   expired. Never move a V1 request ID to V2 or treat the two counters as one.
 
 ### Corrupt event index
 

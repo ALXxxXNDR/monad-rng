@@ -4,6 +4,8 @@ import Link from "next/link";
 const INTEGRATE_TITLE = "Integrate Monad RNG · Platform onboarding";
 const INTEGRATE_DESCRIPTION =
   "Plan a production Monad RNG integration where Tx1 locks the request and Tx2 finalizes and permanently stores the result as one operated flow.";
+const TESTNET_PLATFORM = "0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1";
+const TESTNET_FACTORY = "0x75E6458DaA0c6152419e4617dcf4D459149C1530";
 
 export async function generateMetadata(
   _props: Record<string, never>,
@@ -56,7 +58,7 @@ const guides = [
     role: "Release + deployment engineers",
     title: "Deploy and verify every boundary",
     description:
-      "Verify chain, approved address, runtime code, owner, settings, source, manifest, and a full canary flow separately.",
+      "Verify chain, approved address, runtime code, frozen settings, source, manifest, and a full canary flow separately.",
     file: "deployment-and-verification.md",
   },
   {
@@ -126,8 +128,8 @@ export default function IntegratePage() {
           <h1 id="integrate-title">Integrate Monad RNG</h1>
           <p className="integrate-lede">
             Start with the product boundary, choose who the contract records as
-            requester, then build finalization and permanent settlement as one
-            operated lifecycle.
+            requester, freeze the platform configuration, then build
+            finalization and permanent settlement as one operated lifecycle.
           </p>
           <div className="integrate-actions">
             <a
@@ -143,17 +145,88 @@ export default function IntegratePage() {
           </div>
         </div>
 
-        <aside className="integrate-warning" aria-label="Required integration flow">
+        <aside
+          className="integrate-warning"
+          aria-label="Required integration flow"
+        >
           <span>Required product flow</span>
           <strong>
-            Tx1 locks the request; Tx2 finalizes and permanently stores the random
-            result. A production integration must operate both as one flow.
+            Tx1 locks the request; Tx2 finalizes and permanently stores the
+            random result. A production integration must operate both as one
+            flow.
           </strong>
           <p>
             Tx2 needs an external caller, Monad gas, a compatible RPC, and a
-            durable recovery path. Permissionless does not mean automatic.
+            durable recovery path. No server is required, but permissionless
+            does not mean automatic.
           </p>
         </aside>
+      </section>
+
+      <section
+        className="integrate-section integrate-deployment-section"
+        aria-labelledby="deployment-title"
+      >
+        <div className="integrate-section-heading">
+          <p className="eyebrow">Live Testnet V1</p>
+          <h2 id="deployment-title">Start from the attested contracts.</h2>
+          <p>
+            Both contracts are live on Monad Testnet chain 10143, ownerless,
+            frozen, and tested through real Tx1 and Tx2 flows. The public
+            canary is free; the Factory creates a separately configured
+            instance for each platform.
+          </p>
+        </div>
+        <div className="integrate-deployment-grid">
+          <article className="integrate-deployment-card">
+            <span>Free public canary</span>
+            <h3>PlatformRandomness</h3>
+            <code>{TESTNET_PLATFORM}</code>
+            <p>
+              Use this address for the fastest Testnet experiment. Tx1 creates
+              one request; Tx2 authenticates the three future headers and
+              permanently stores its result.
+            </p>
+            <a
+              href={`https://testnet.monadscan.com/address/${TESTNET_PLATFORM}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View Platform on explorer <span aria-hidden="true">↗</span>
+            </a>
+          </article>
+          <article className="integrate-deployment-card">
+            <span>Isolated deployment path</span>
+            <h3>RandomnessFactory</h3>
+            <code>{TESTNET_FACTORY}</code>
+            <p>
+              Call <code>deployPlatform</code> with the recipient, name, price,
+              and pending limit that your platform wants to freeze forever.
+              The Factory retains no ownership.
+            </p>
+            <a
+              href={`https://testnet.monadscan.com/address/${TESTNET_FACTORY}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View Factory on explorer <span aria-hidden="true">↗</span>
+            </a>
+          </article>
+        </div>
+        <div className="integrate-actions">
+          <a
+            className="button button--primary"
+            href="/docs/testnet-deployment.md"
+          >
+            Open deployment evidence
+          </a>
+          <a
+            className="button button--secondary"
+            href="/deployments/monad-testnet-v1.json"
+          >
+            Open machine-readable manifest
+          </a>
+        </div>
       </section>
 
       <section
@@ -165,7 +238,8 @@ export default function IntegratePage() {
           <h2 id="flow-title">Design past the request transaction.</h2>
           <p>
             A request is unfinished until its authenticated result is stored and
-            the application has settled the original business action exactly once.
+            the application has settled the original business action exactly
+            once.
           </p>
         </div>
         <ol className="integrate-flow">
@@ -181,8 +255,8 @@ export default function IntegratePage() {
             <span>02 · Wait</span>
             <h3>Wait for the targets</h3>
             <p>
-              Use block height—not a wall-clock timer. The targets are R+8, R+24,
-              and R+40; requester finalization opens at R+42.
+              Use block height—not a wall-clock timer. The targets are R+8,
+              R+24, and R+40; requester finalization opens at R+42.
             </p>
           </li>
           <li>
@@ -190,7 +264,8 @@ export default function IntegratePage() {
             <h3>Authenticate and finalize</h3>
             <p>
               Fetch the three exact RLP headers from a checked Monad RPC. Submit
-              them through the stored requester path and preserve the transaction.
+              them through the stored requester path and preserve the
+              transaction.
             </p>
           </li>
           <li>
@@ -274,16 +349,16 @@ export default function IntegratePage() {
                 requester-window Tx2 through the wrapper.
               </li>
               <li>
-                Prefer this mode for paid entries, prizes, mints, assignments, and
-                other value-bearing actions.
+                Prefer this mode for paid entries, prizes, mints, assignments,
+                and other value-bearing actions.
               </li>
             </ul>
           </article>
         </div>
         <p className="integrate-comparison-note">
           From R+104, permissionless rescue may finalize the underlying request
-          directly. The application still has to reconcile and settle the wrapper
-          entry exactly once.
+          directly. The application still has to reconcile and settle the
+          wrapper entry exactly once.
         </p>
       </section>
 
@@ -352,7 +427,34 @@ export default function IntegratePage() {
             <strong>No automatic finalization or rescue</strong>
             <span>
               A funded external operator must submit every Tx2. Permissionless
-              rescue only changes who is allowed to call.
+              rescue only changes who is allowed to call. That caller can be a
+              browser, script, serverless job, or keeper; an always-on server is
+              not a protocol requirement.
+            </span>
+          </li>
+          <li>
+            <strong>V1 is ownerless and frozen</strong>
+            <span>
+              Revenue recipient, name, price, and pending policy are fixed at
+              deployment. There is no owner, admin, pause, setter, proxy, or
+              upgrade; a mistake or code change requires a new V2 address.
+            </span>
+          </li>
+          <li>
+            <strong>Free mode needs an anti-spam policy</strong>
+            <span>
+              <code>maxPending == 0</code> means unlimited. A positive free cap
+              can be filled until requests finalize or expire, so add
+              eligibility, economic, or rate controls in the integrating
+              platform.
+            </span>
+          </li>
+          <li>
+            <strong>Revenue has one permanent destination</strong>
+            <span>
+              Anyone may trigger a revenue withdrawal, but the entire balance
+              always goes to the deployment-fixed recipient. The caller cannot
+              redirect it.
             </span>
           </li>
           <li>
@@ -364,7 +466,9 @@ export default function IntegratePage() {
             </span>
           </li>
           <li>
-            <strong>The browser is a reference demo, not a production SDK</strong>
+            <strong>
+              The browser is a reference demo, not a production SDK
+            </strong>
             <span>
               Its localStorage and Web Locks are not a durable journal, shared
               queue, indexer, keeper, or cross-device idempotency system.
@@ -373,16 +477,16 @@ export default function IntegratePage() {
           <li>
             <strong>Only the Testnet baseline is validated</strong>
             <span>
-              Only Monad Testnet chain 10143 has been validated for this release.
-              Mainnet needs fresh RPC and EIP-2935 verification, an updated threat
-              model, and an independent security review.
+              Only Monad Testnet chain 10143 has been validated for this
+              release. Mainnet needs fresh RPC and EIP-2935 verification, an
+              updated threat model, and an independent security review.
             </span>
           </li>
           <li>
             <strong>Expiry is terminal</strong>
             <span>
-              From R+8200 the request cannot produce randomness. Expiry creates no
-              result, protocol refund, keeper reward, or later retry right.
+              From R+8200 the request cannot produce randomness. Expiry creates
+              no result, protocol refund, keeper reward, or later retry right.
             </span>
           </li>
         </ul>
@@ -393,7 +497,9 @@ export default function IntegratePage() {
         <h2>Run the reference path, then build from the guides.</h2>
         <p>
           The demo makes Tx1, the target wait, Tx2, stored reads, rescue, and
-          expiry visible. The public artifact supplies the exact ABI and bytecode.
+          expiry visible. The public artifact supplies the exact ABI and
+          bytecode. Production teams must also verify a raw-header RPC with{" "}
+          <code>debug_getRawHeader</code>.
         </p>
         <div className="integrate-actions">
           <Link className="button button--primary" href="/#demo">
@@ -404,7 +510,14 @@ export default function IntegratePage() {
             href="/contracts/PlatformRandomness.json"
             aria-label="Open the PlatformRandomness ABI and bytecode artifact"
           >
-            Open ABI + bytecode
+            Open platform artifact
+          </a>
+          <a
+            className="button button--secondary"
+            href="/contracts/RandomnessFactory.json"
+            aria-label="Open the ownerless RandomnessFactory ABI and bytecode artifact"
+          >
+            Open Factory artifact
           </a>
         </div>
       </section>
@@ -416,7 +529,9 @@ export default function IntegratePage() {
           </span>
           <span>Monad RNG</span>
         </Link>
-        <p>Authenticated multi-block proposer entropy. Not a cryptographic VRF.</p>
+        <p>
+          Authenticated multi-block proposer entropy. Not a cryptographic VRF.
+        </p>
         <Link href="/">Back to home →</Link>
       </footer>
     </main>

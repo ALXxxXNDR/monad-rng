@@ -4,10 +4,11 @@
 
 > Tx1 locks the request; Tx2 finalizes and permanently stores the random result. A production integration must operate both as one flow.
 
-Only Monad Testnet, chain ID `10143`, has been validated for this release.
-Mainnet adoption is outside that baseline. Mainnet needs fresh RPC and EIP-2935
-verification, an updated threat model, and an independent security review
-appropriate to the value at risk.
+At the start of the release process, only Monad Testnet, chain ID `10143`, is
+the validated baseline. Mainnet must remain blocked until the exact build
+passes Testnet end to end. Mainnet needs fresh RPC and EIP-2935 verification,
+an updated threat model, and an independent security review appropriate to the
+value at risk. That review must include a working `debug_getRawHeader` path.
 
 Tx1 locks the economic action and fixes three future target blocks.
 
@@ -21,6 +22,17 @@ Tx2 and rescue are **not automatic**. A smart contract cannot wake itself up:
 an assigned person or service must submit each transaction and pay its Monad
 gas.
 
+The contract does not require an always-on application server. A browser,
+script, serverless task, community caller, or keeper can submit Tx2. That
+flexibility does not remove the need for a funded caller, monitoring, and a
+deadline policy.
+
+V1 is ownerless and fixed forever. It has no administrator, pause, proxy,
+upgrade, or configuration setter. `revenueRecipient`, `platformName`,
+`requestPrice`, and `maxPending` are chosen at deployment. If they are wrong
+or the code needs to change, the product must move new requests to a new V2
+address while it finishes all existing V1 requests.
+
 ## Five-minute fit check
 
 Do not adopt this primitive if any answer in the right-hand column is true.
@@ -31,6 +43,8 @@ Do not adopt this primitive if any answer in the right-hand column is true.
 | When is value committed? | Payment, eligibility, inventory, and the randomness request become irreversible together in Tx1. | A player can wait for information, cancel, retry, or select among requests after Tx1. |
 | What happens after proof expiry? | We have approved a customer-facing refund, replacement, or alternative-fulfilment policy. | We have no expiry customer policy or assume the protocol refunds the request. |
 | What security property is required? | Authenticated proposer entropy with a documented value ceiling is acceptable. | The product needs cryptographic VRF guarantees or perfectly unbiasable randomness. |
+| Can we accept permanent configuration? | We have independently approved the recipient, name, price, cap, code, and V2 migration procedure. | We need an emergency admin, pause, price change, cap change, recipient recovery, or in-place upgrade. |
+| Can the free mode withstand spam? | We have chosen a paid gate, wrapper eligibility, rate control, or tested capacity policy. | We assume a finite free cap is Sybil protection or that `maxPending == 0` blocks requests. |
 
 If you cannot name a Tx2 operator and rescue policy, cannot bind value during
 Tx1, cannot define an expiry customer policy, or need cryptographic VRF
@@ -54,9 +68,15 @@ one isolated application:
    value in `[0, upperBound)` with rejection sampling instead of biased raw
    modulo.
 
-Each platform instance has separate request IDs, storage, pending cap, price,
-pause state, owner, and revenue balance. One platform filling its own pending
-cap does not fill another platform's cap.
+Each platform instance has separate request IDs, storage, pending state, fixed
+cap, fixed price, fixed revenue recipient, and revenue balance. One platform
+filling its own positive cap does not fill another platform's cap.
+
+`maxPending == 0` means unlimited. A positive value is a permanent cap. With a
+free request price, a Sybil attacker may fill a finite cap and hold its slots
+until finalization or expiry; unlimited mode avoids cap lockout but permits
+unbounded platform-local state growth paid for by request senders. Neither
+choice replaces application eligibility or economic controls.
 
 ## What it does not guarantee
 
@@ -64,6 +84,13 @@ This construction is **not a cryptographic VRF** and is not perfectly
 unbiasable. A scheduled proposer can know its own contribution and may choose
 to skip or withhold a proposal. Three separated targets reduce simple
 single-block influence; they do not eliminate last-proposer bias.
+
+A block producer can also order or delay Tx1 inclusion within the power the
+network gives that producer, which changes the request block and therefore all
+three targets. Requests included in the same block reuse the same three target
+headers even though their final seeds are domain-separated. Evaluate the total
+value across those correlated requests: one proposal decision can affect many
+draws at once.
 
 The contract also does not provide:
 
@@ -73,7 +100,9 @@ The contract also does not provide:
   favourable result;
 - a production RPC service, transaction journal, indexer, or incident response
   team;
-- recovery of a random result after the oldest proof has expired; or
+- recovery of a random result after the oldest proof has expired;
+- an emergency admin, pause, configuration correction, recipient recovery, or
+  in-place upgrade; or
 - an independent security audit of your wrapper and product integration.
 
 Use an external VRF or threshold randomness whenever a prize or aggregate
@@ -86,17 +115,22 @@ it does **not** mean transactions are gasless.
 
 | Cost or balance | Who is responsible |
 | --- | --- |
-| Platform deployment and administration gas | The deploying or owner operation signer |
+| Platform deployment gas | The deployment signer; that wallet gains no authority |
 | Tx1 gas and exact `requestPrice` | The Tx1 sender, unless the platform separately sponsors it |
 | Requester-window Tx2 gas | The assigned requester finalizer or its sponsor |
 | Permissionless rescue gas | The rescue caller or a separately funded platform keeper |
 | Expiry gas | The expiry caller or the platform |
-| `requestPrice` revenue | Remains in that platform instance until its owner withdraws it |
+| Revenue sweep gas | Any caller may pay; the entire balance always goes to the fixed `revenueRecipient` |
+| `requestPrice` revenue | Remains in that platform instance until `withdrawRevenue()` succeeds |
 | Customer expiry compensation | The integrating platform under its own policy |
 
 There is no protocol treasury, relayer, gas reimbursement, rescue reward, or
 automatic refund. Budget for congestion and maintain funded Tx2 and rescue
 signers before accepting requests.
+
+The withdrawal caller cannot redirect or claim revenue. Use a recipient that
+can accept native MON. A wrong or reverting recipient can strand revenue
+because V1 has no recovery function.
 
 ## Full lifecycle by block number
 
@@ -165,13 +199,13 @@ allowed to submit a transaction; it does not assign operational ownership.
 
 | Role | Production assignment |
 | --- | --- |
-| Platform owner / multisig | Owns the isolated instance; approves and verifies price, pending cap, pause state, withdrawals, and ownership changes. |
+| Release approvers | Verify the ownerless code, approved address, fixed recipient/name/price/cap, manifests, and V2 migration gate. They have no on-chain admin authority. |
 | Application wrapper | Atomically binds payment, eligibility, inventory, and Tx1; records the player-to-request mapping; forwards requester-window Tx2 when the wrapper is the stored requester. |
 | Requester-window finalizer | Watches new requests and submits funded Tx2 transactions from `R+42`, before rescue is needed. |
 | Permissionless rescue keeper | Independently takes over at `R+104`, submits the same authenticated proof, and continues until the internal safety cutoff. Rescue is not automatic. |
 | RPC operator | Provides and health-checks chain ID, finalized reads, canonical block data, and `debug_getRawHeader`, with capacity, timeouts, and failover. |
 | Treasury | Funds deployment, Tx1 sponsorship if offered, Tx2, rescue, expiry, and incident gas; reconciles request revenue and customer compensation. |
-| Monitoring | Indexes request/finalize/expiry and admin events; alerts on `R+42`, `R+104`, the safety cutoff, pending-cap pressure, RPC failure, and low signer balance. |
+| Monitoring | Indexes request/finalize/expiry and revenue-withdrawal events; alerts on `R+42`, `R+104`, the safety cutoff, pending growth, RPC failure, and low signer balance. |
 | Customer support | Applies the pre-approved expiry policy, communicates status without promising an unavailable result, and prevents duplicate compensation. |
 
 The Monad Testnet browser application is a reference demo. Its `localStorage`
@@ -196,8 +230,13 @@ Choose **Go** only when every item is checked:
       prevention are approved before Tx1.
 - [ ] RPC capacity, raw-header support, failover, gas budgets, monitoring, and
       incident escalation have been rehearsed.
-- [ ] The approved chain, contract address, code, owner, and configuration are
-      pinned and independently verified.
+- [ ] The approved chain, contract address, code, fixed recipient/name/price/
+      cap, and absence of owner/admin/pause/upgrade/setters are independently
+      verified.
+- [ ] `maxPending == 0` is treated as unlimited; zero-price spam, finite-cap
+      lockout, and unlimited-mode growth have explicit controls.
+- [ ] A wrong configuration or defect triggers the documented V2 address
+      migration; nobody expects the deployment wallet to repair V1.
 - [ ] The integration has been tested end to end through Tx1, requester Tx2,
       rescue, permanent read, and expiry.
 

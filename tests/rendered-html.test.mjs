@@ -126,6 +126,7 @@ test("server-renders the platform integration hub", async () => {
   );
 
   for (const guide of [
+    "testnet-deployment.md",
     "production-readiness.md",
     "integration-guide.md",
     "deployment-and-verification.md",
@@ -137,6 +138,10 @@ test("server-renders the platform integration hub", async () => {
     );
   }
 
+  assert.match(html, /0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1/);
+  assert.match(html, /0x75E6458DaA0c6152419e4617dcf4D459149C1530/);
+  assert.match(html, /Start from the attested contracts/i);
+  assert.match(html, /href="\/deployments\/monad-testnet-v1\.json"/i);
   assert.match(html, /Direct EOA/i);
   assert.match(
     html,

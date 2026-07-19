@@ -6,27 +6,38 @@ import {Test} from "forge-std/Test.sol";
 import {PlatformRandomness} from "../src/PlatformRandomness.sol";
 import {MonadHeaderFixture} from "./fixtures/MonadHeaderFixture.sol";
 
-contract ReentrantPlatformOwner {
-    PlatformRandomness private immutable RANDOMNESS;
-    uint256 private immutable REENTRY_AMOUNT;
+contract ReentrantRevenueRecipient {
+    PlatformRandomness public randomness;
 
     bool public attemptedReentry;
     bool public reentrySucceeded;
 
-    constructor(PlatformRandomness randomness_, uint256 reentryAmount_) {
-        RANDOMNESS = randomness_;
-        REENTRY_AMOUNT = reentryAmount_;
-    }
-
-    function withdraw(address payable recipient, uint256 amount) external {
-        RANDOMNESS.withdraw(recipient, amount);
+    constructor() {
+        randomness = new PlatformRandomness(address(this), "Reentry Harness", 1 ether, 1);
     }
 
     receive() external payable {
         attemptedReentry = true;
-        try RANDOMNESS.withdraw(payable(address(this)), REENTRY_AMOUNT) {
+        try randomness.withdrawRevenue() {
             reentrySucceeded = true;
         } catch {}
+    }
+}
+
+contract ToggleRevenueRecipient {
+    PlatformRandomness public randomness;
+    bool public rejectsRevenue = true;
+
+    constructor() {
+        randomness = new PlatformRandomness(address(this), "Toggle Harness", 1 ether, 1);
+    }
+
+    function allowRevenue() external {
+        rejectsRevenue = false;
+    }
+
+    receive() external payable {
+        require(!rejectsRevenue, "revenue rejected");
     }
 }
 
@@ -60,18 +71,21 @@ contract PlatformRandomnessTest is Test {
         uint256 indexed requestId, address indexed requester, address indexed finalizer, bytes32 result
     );
     event RandomnessRequestExpired(uint256 indexed requestId, address indexed requester, address indexed expirer);
+    event RevenueWithdrawn(address indexed caller, address indexed recipient, uint256 amount);
 
-    address private ownerA = makeAddr("ownerA");
-    address private ownerB = makeAddr("ownerB");
+    address private recipientA = makeAddr("recipientA");
+    address private recipientB = makeAddr("recipientB");
     address private alice = makeAddr("alice");
     address private bob = makeAddr("bob");
 
     PlatformRandomness private platformA;
     PlatformRandomness private platformB;
+    PlatformRandomnessDrawHarness private drawHarness;
 
     function setUp() public {
-        platformA = new PlatformRandomness(ownerA, "Platform A", 1 ether, 2);
-        platformB = new PlatformRandomness(ownerB, "Platform B", 0, 3);
+        platformA = new PlatformRandomness(recipientA, "Platform A", 1 ether, 2);
+        platformB = new PlatformRandomness(recipientB, "Platform B", 0, 3);
+        drawHarness = new PlatformRandomnessDrawHarness();
 
         vm.deal(alice, 20 ether);
         vm.deal(bob, 20 ether);
@@ -114,7 +128,7 @@ contract PlatformRandomnessTest is Test {
         vm.prank(alice);
         platformA.requestRandomness{value: 1 ether}();
 
-        bytes32 firstRequestSlot = keccak256(abi.encode(uint256(1), uint256(7)));
+        bytes32 firstRequestSlot = keccak256(abi.encode(uint256(1), uint256(6)));
         bytes32 slot0 = vm.load(address(platformA), firstRequestSlot);
         bytes32 slot1 = vm.load(address(platformA), bytes32(uint256(firstRequestSlot) + 1));
         bytes32 slot2 = vm.load(address(platformA), bytes32(uint256(firstRequestSlot) + 2));
@@ -142,16 +156,12 @@ contract PlatformRandomnessTest is Test {
         uint256 tooLarge = uint256(type(uint96).max) + 1;
 
         vm.expectRevert(abi.encodeWithSelector(PlatformRandomness.PriceTooLarge.selector, tooLarge));
-        new PlatformRandomness(ownerA, "Expensive", tooLarge, 1);
-
-        vm.expectRevert(abi.encodeWithSelector(PlatformRandomness.PriceTooLarge.selector, tooLarge));
-        vm.prank(ownerA);
-        platformA.setRequestPrice(tooLarge);
+        new PlatformRandomness(recipientA, "Expensive", tooLarge, 1);
     }
 
     function test_RequestAcceptsLargestPriceThatFitsCompressedSnapshot() public {
         uint256 largest = type(uint96).max;
-        PlatformRandomness expensive = new PlatformRandomness(ownerA, "Expensive", largest, 1);
+        PlatformRandomness expensive = new PlatformRandomness(recipientA, "Expensive", largest, 1);
         vm.deal(alice, largest);
 
         vm.prank(alice);
@@ -175,21 +185,24 @@ contract PlatformRandomnessTest is Test {
         platformB.requestRandomness{value: 1}();
     }
 
-    function test_RequestPriceChangesAffectOnlyFutureRequests() public {
+    function test_RequestConfigurationIsPermanentlyFixed() public {
         vm.prank(alice);
         uint256 firstId = platformA.requestRandomness{value: 1 ether}();
 
-        vm.prank(ownerA);
-        platformA.setRequestPrice(2 ether);
-
         vm.roll(1_100);
         vm.prank(bob);
-        uint256 secondId = platformA.requestRandomness{value: 2 ether}();
+        uint256 secondId = platformA.requestRandomness{value: 1 ether}();
 
         assertEq(platformA.getRequest(firstId).pricePaid, 1 ether);
-        assertEq(platformA.getRequest(secondId).pricePaid, 2 ether);
+        assertEq(platformA.getRequest(secondId).pricePaid, 1 ether);
         assertEq(platformA.getRequest(firstId).firstTargetBlock, 1_008);
         assertEq(platformA.getRequest(secondId).firstTargetBlock, 1_108);
+        assertEq(platformA.revenueRecipient(), recipientA);
+        assertEq(platformA.platformName(), "Platform A");
+        assertEq(platformA.requestPrice(), 1 ether);
+        assertEq(platformA.maxPending(), 2);
+        assertEq(platformA.VERSION(), 1);
+        assertTrue(platformA.CONFIGURATION_LOCKED());
     }
 
     function test_RequestCountersAndPendingCapsAreIsolatedByPlatform() public {
@@ -214,132 +227,121 @@ contract PlatformRandomnessTest is Test {
         assertEq(platformB.nextRequestId(), 2);
     }
 
-    function test_RequestPauseOnOnePlatformDoesNotPauseAnother() public {
-        vm.prank(ownerA);
-        platformA.setRequestsPaused(true);
+    function test_RequestHasNoOwnerAdminPauseOrUpgradePaths() public {
+        _assertMissing(abi.encodeWithSignature("owner()"));
+        _assertMissing(abi.encodeWithSignature("setRequestPrice(uint256)", 9 ether));
+        _assertMissing(abi.encodeWithSignature("setMaxPending(uint256)", 99));
+        _assertMissing(abi.encodeWithSignature("setRequestsPaused(bool)", true));
+        _assertMissing(abi.encodeWithSignature("requestsPaused()"));
+        _assertMissing(abi.encodeWithSignature("transferOwnership(address)", recipientB));
+        _assertMissing(abi.encodeWithSignature("withdraw(address,uint256)", recipientB, 1));
+        _assertMissing(abi.encodeWithSignature("upgradeTo(address)", recipientB));
+        _assertMissing(abi.encodeWithSignature("pause()"));
 
-        vm.expectRevert(PlatformRandomness.RequestsArePaused.selector);
-        vm.prank(alice);
-        platformA.requestRandomness{value: 1 ether}();
-
-        vm.prank(alice);
-        uint256 requestIdB = platformB.requestRandomness();
-
-        assertEq(requestIdB, 1);
-        assertTrue(platformA.requestsPaused());
-        assertFalse(platformB.requestsPaused());
-    }
-
-    function test_RequestAdministrationIsOwnerOnlyAndInstanceLocal() public {
-        vm.expectRevert(PlatformRandomness.Unauthorized.selector);
-        vm.prank(ownerB);
-        platformA.setRequestPrice(9 ether);
-
-        vm.expectRevert(PlatformRandomness.Unauthorized.selector);
-        vm.prank(ownerB);
-        platformA.setMaxPending(99);
-
-        vm.expectRevert(PlatformRandomness.Unauthorized.selector);
-        vm.prank(ownerB);
-        platformA.setRequestsPaused(true);
-
-        vm.prank(ownerB);
-        platformB.setRequestPrice(3 ether);
-        vm.prank(ownerB);
-        platformB.setMaxPending(7);
-        vm.prank(ownerB);
-        platformB.setRequestsPaused(true);
-
+        assertEq(platformA.revenueRecipient(), recipientA);
         assertEq(platformA.requestPrice(), 1 ether);
         assertEq(platformA.maxPending(), 2);
-        assertFalse(platformA.requestsPaused());
-        assertEq(platformB.requestPrice(), 3 ether);
-        assertEq(platformB.maxPending(), 7);
-        assertTrue(platformB.requestsPaused());
+        assertEq(platformB.revenueRecipient(), recipientB);
+        assertEq(platformB.requestPrice(), 0);
+        assertEq(platformB.maxPending(), 3);
     }
 
-    function test_RequestCapCannotBeLoweredBelowCurrentPendingCount() public {
+    function test_RequestZeroMaxPendingMeansUnlimited() public {
+        PlatformRandomness unlimited = new PlatformRandomness(recipientA, "Unlimited", 0, 0);
+
+        for (uint256 index; index < 300; ++index) {
+            // The loop bound proves this test-only narrowing conversion is safe.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            vm.prank(address(uint160(index + 1_000)));
+            unlimited.requestRandomness();
+        }
+
+        assertEq(unlimited.maxPending(), 0);
+        assertEq(unlimited.pendingCount(), 300);
+        assertEq(unlimited.nextRequestId(), 301);
+    }
+
+    function test_RequestRejectsZeroRevenueRecipient() public {
+        vm.expectRevert(PlatformRandomness.InvalidRevenueRecipient.selector);
+        new PlatformRandomness(address(0), "Invalid", 0, 0);
+    }
+
+    function test_RequestRevenueSweepIsPermissionlessFixedAndInstanceLocal() public {
         vm.prank(alice);
         platformA.requestRandomness{value: 1 ether}();
+
+        uint256 recipientBalanceBefore = recipientA.balance;
+        vm.expectEmit(true, true, false, true, address(platformA));
+        emit RevenueWithdrawn(bob, recipientA, 1 ether);
         vm.prank(bob);
-        platformA.requestRandomness{value: 1 ether}();
+        platformA.withdrawRevenue();
 
-        vm.expectRevert(abi.encodeWithSelector(PlatformRandomness.MaxPendingBelowPending.selector, 1, 2));
-        vm.prank(ownerA);
-        platformA.setMaxPending(1);
-
-        vm.prank(ownerA);
-        platformA.setMaxPending(2);
-        assertEq(platformA.maxPending(), 2);
-    }
-
-    function test_RequestOwnershipTransferRejectsUnauthorizedAndZeroOwner() public {
-        vm.expectRevert(PlatformRandomness.Unauthorized.selector);
-        vm.prank(ownerB);
-        platformA.transferOwnership(ownerB);
-
-        vm.expectRevert(PlatformRandomness.InvalidOwner.selector);
-        vm.prank(ownerA);
-        platformA.transferOwnership(address(0));
-
-        vm.prank(ownerA);
-        platformA.transferOwnership(ownerB);
-
-        assertEq(platformA.owner(), ownerB);
-
-        vm.expectRevert(PlatformRandomness.Unauthorized.selector);
-        vm.prank(ownerA);
-        platformA.setRequestPrice(4 ether);
-
-        vm.prank(ownerB);
-        platformA.setRequestPrice(4 ether);
-        assertEq(platformA.requestPrice(), 4 ether);
-    }
-
-    function test_RequestRevenueWithdrawalIsOwnerOnlyAndInstanceLocal() public {
-        vm.prank(alice);
-        platformA.requestRandomness{value: 1 ether}();
-
-        vm.expectRevert(PlatformRandomness.Unauthorized.selector);
-        vm.prank(ownerB);
-        platformA.withdraw(payable(ownerB), 1 ether);
-
-        uint256 ownerBalanceBefore = ownerA.balance;
-        vm.prank(ownerA);
-        platformA.withdraw(payable(ownerA), 0.4 ether);
-
-        assertEq(ownerA.balance, ownerBalanceBefore + 0.4 ether);
-        assertEq(address(platformA).balance, 0.6 ether);
+        assertEq(recipientA.balance, recipientBalanceBefore + 1 ether);
+        assertEq(bob.balance, 20 ether);
+        assertEq(address(platformA).balance, 0);
         assertEq(address(platformB).balance, 0);
     }
 
-    function test_RequestWithdrawalRejectsInvalidRecipientAndExcessAmount() public {
+    function test_RequestRevenueSweepFailureRollsBackAndDoesNotLockGuard() public {
+        ToggleRevenueRecipient recipient = new ToggleRevenueRecipient();
+        PlatformRandomness rejectingPlatform = recipient.randomness();
+
         vm.prank(alice);
-        platformA.requestRandomness{value: 1 ether}();
+        rejectingPlatform.requestRandomness{value: 1 ether}();
 
-        vm.expectRevert(PlatformRandomness.InvalidRecipient.selector);
-        vm.prank(ownerA);
-        platformA.withdraw(payable(address(0)), 1);
+        vm.expectRevert(PlatformRandomness.TransferFailed.selector);
+        vm.prank(bob);
+        rejectingPlatform.withdrawRevenue();
 
-        vm.expectRevert(abi.encodeWithSelector(PlatformRandomness.InsufficientBalance.selector, 1 ether, 2 ether));
-        vm.prank(ownerA);
-        platformA.withdraw(payable(ownerA), 2 ether);
+        assertEq(address(rejectingPlatform).balance, 1 ether);
+        assertEq(rejectingPlatform.pendingCount(), 1);
+
+        recipient.allowRevenue();
+        vm.prank(bob);
+        rejectingPlatform.withdrawRevenue();
+
+        assertEq(address(recipient).balance, 1 ether);
+        assertEq(address(rejectingPlatform).balance, 0);
     }
 
-    function test_RequestWithdrawalBlocksReentrancy() public {
+    function test_RequestForcedMonCanOnlySweepToFixedRecipient() public {
+        vm.deal(address(platformA), 3 ether);
+        uint256 recipientBalanceBefore = recipientA.balance;
+
+        vm.prank(bob);
+        platformA.withdrawRevenue();
+
+        assertEq(recipientA.balance, recipientBalanceBefore + 3 ether);
+        assertEq(bob.balance, 20 ether);
+        assertEq(address(platformA).balance, 0);
+    }
+
+    function test_RequestRuntimeCodeIsIdenticalAcrossFrozenConfigurations() public view {
+        assertEq(address(platformA).codehash, address(platformB).codehash);
+        assertNotEq(platformA.revenueRecipient(), platformB.revenueRecipient());
+        assertNotEq(platformA.requestPrice(), platformB.requestPrice());
+        assertNotEq(platformA.maxPending(), platformB.maxPending());
+    }
+
+    function test_RequestRevenueSweepRejectsEmptyBalance() public {
+        vm.expectRevert(PlatformRandomness.NoRevenue.selector);
+        vm.prank(bob);
+        platformA.withdrawRevenue();
+    }
+
+    function test_RequestRevenueSweepBlocksReentrancy() public {
+        ReentrantRevenueRecipient recipient = new ReentrantRevenueRecipient();
+        PlatformRandomness reentrantPlatform = recipient.randomness();
+
         vm.prank(alice);
-        platformA.requestRandomness{value: 1 ether}();
+        reentrantPlatform.requestRandomness{value: 1 ether}();
+        vm.prank(bob);
+        reentrantPlatform.withdrawRevenue();
 
-        ReentrantPlatformOwner attacker = new ReentrantPlatformOwner(platformA, 0.5 ether);
-        vm.prank(ownerA);
-        platformA.transferOwnership(address(attacker));
-
-        attacker.withdraw(payable(address(attacker)), 0.5 ether);
-
-        assertTrue(attacker.attemptedReentry());
-        assertFalse(attacker.reentrySucceeded());
-        assertEq(address(attacker).balance, 0.5 ether);
-        assertEq(address(platformA).balance, 0.5 ether);
+        assertTrue(recipient.attemptedReentry());
+        assertFalse(recipient.reentrySucceeded());
+        assertEq(address(recipient).balance, 1 ether);
+        assertEq(address(reentrantPlatform).balance, 0);
     }
 
     function test_RequestProtocolFeeIsPermanentlyZeroOnEveryInstance() public view {
@@ -584,15 +586,9 @@ contract PlatformRandomnessTest is Test {
         assertNotEq(resultA, resultB);
     }
 
-    function test_FinalizeRemainsAvailableWhenNewRequestsArePausedAndSettingsChange() public {
+    function test_FinalizeKeepsConfigurationUnchanged() public {
         (uint256 requestId, PlatformRandomness.Request memory request) = _requestForAlice(platformA, 1 ether);
         (bytes memory header1, bytes memory header2, bytes memory header3) = _headers(request);
-
-        vm.startPrank(ownerA);
-        platformA.setRequestsPaused(true);
-        platformA.setRequestPrice(99 ether);
-        platformA.setMaxPending(1);
-        vm.stopPrank();
 
         vm.roll(request.thirdTargetBlock + 2);
         _setRecentHashes(request, header1, header2, header3);
@@ -601,6 +597,9 @@ contract PlatformRandomnessTest is Test {
 
         assertTrue(platformA.getRequest(requestId).finalized);
         assertEq(platformA.pendingCount(), 0);
+        assertEq(platformA.revenueRecipient(), recipientA);
+        assertEq(platformA.requestPrice(), 1 ether);
+        assertEq(platformA.maxPending(), 2);
     }
 
     function test_FinalizeDrawIsPermanentAndBounded() public {
@@ -623,24 +622,74 @@ contract PlatformRandomnessTest is Test {
         platformA.draw(requestId, 0);
     }
 
-    function test_DrawAcceptsCandidateAtOrAboveRejectionThresholdDirectly() public {
-        PlatformRandomnessDrawHarness harness = new PlatformRandomnessDrawHarness();
-
-        assertEq(harness.exposedDraw(bytes32(uint256(123)), 100), 23);
+    function test_DrawAcceptsCandidateAtOrAboveRejectionThresholdDirectly() public view {
+        assertEq(drawHarness.exposedDraw(bytes32(uint256(123)), 100), 23);
     }
 
-    function test_DrawDomainSeparatesAndRehashesRejectedCandidate() public {
-        PlatformRandomnessDrawHarness harness = new PlatformRandomnessDrawHarness();
+    function test_DrawDomainSeparatesAndRehashesRejectedCandidate() public view {
         bytes32 seed = bytes32(0);
         uint256 firstRehash = uint256(keccak256(abi.encode("MONAD_PUBLIC_RANDOMNESS_DRAW_V1", seed, uint256(0))));
 
         assertGe(firstRehash, 36, "fixture must accept the first domain-separated rehash");
-        assertEq(harness.exposedDraw(seed, 100), firstRehash % 100);
+        assertEq(drawHarness.exposedDraw(seed, 100), firstRehash % 100);
+    }
+
+    function testFuzz_DrawAlwaysReturnsInsideBound(bytes32 seed, uint256 rawUpperBound) public view {
+        uint256 upperBound = bound(rawUpperBound, 1, type(uint128).max);
+        assertLt(drawHarness.exposedDraw(seed, upperBound), upperBound);
+    }
+
+    function testFuzz_FrozenConfigurationKeepsIdenticalRuntime(
+        address revenueRecipient,
+        uint96 requestPrice,
+        uint256 maxPending
+    ) public {
+        vm.assume(revenueRecipient != address(0));
+        PlatformRandomness candidate =
+            new PlatformRandomness(revenueRecipient, "Fuzz configuration", requestPrice, maxPending);
+
+        assertEq(address(candidate).codehash, address(platformA).codehash);
+        assertEq(candidate.revenueRecipient(), revenueRecipient);
+        assertEq(candidate.requestPrice(), requestPrice);
+        assertEq(candidate.maxPending(), maxPending);
+        assertTrue(candidate.CONFIGURATION_LOCKED());
+    }
+
+    function testFuzz_PendingCountTracksFinalizeAndExpiryLifecycle(uint8 rawRequests, uint8 rawFinalized) public {
+        uint256 requestCount = bound(rawRequests, 1, 16);
+        uint256 finalizedCount = bound(rawFinalized, 0, requestCount);
+        PlatformRandomness unlimited = new PlatformRandomness(recipientA, "Lifecycle fuzz", 0, 0);
+
+        vm.roll(REQUEST_BLOCK);
+        vm.startPrank(alice);
+        for (uint256 index; index < requestCount; ++index) {
+            unlimited.requestRandomness();
+        }
+        vm.stopPrank();
+        assertEq(unlimited.pendingCount(), requestCount);
+
+        PlatformRandomness.Request memory first = unlimited.getRequest(1);
+        (bytes memory header1, bytes memory header2, bytes memory header3) = _headers(first);
+        vm.roll(first.thirdTargetBlock + 2);
+        _setRecentHashes(first, header1, header2, header3);
+
+        vm.startPrank(alice);
+        for (uint256 requestId = 1; requestId <= finalizedCount; ++requestId) {
+            unlimited.finalizeRandomness(requestId, header1, header2, header3);
+        }
+        vm.stopPrank();
+        assertEq(unlimited.pendingCount(), requestCount - finalizedCount);
+
+        vm.roll(first.firstTargetBlock + 8_192);
+        for (uint256 requestId = finalizedCount + 1; requestId <= requestCount; ++requestId) {
+            vm.prank(bob);
+            unlimited.expireRequest(requestId);
+        }
+        assertEq(unlimited.pendingCount(), 0);
+        assertEq(unlimited.nextRequestId(), requestCount + 1);
     }
 
     function test_ExpireRejectsAtLastFinalizableBlockAndAllowsAnyoneAtNextBlock() public {
-        vm.prank(ownerA);
-        platformA.setMaxPending(1);
         (uint256 requestId, PlatformRandomness.Request memory request) = _requestForAlice(platformA, 1 ether);
         uint256 lastFinalizableBlock = request.firstTargetBlock + 8_191;
         uint256 firstExpirationBlock = lastFinalizableBlock + 1;
@@ -840,6 +889,12 @@ contract PlatformRandomnessTest is Test {
 
     function _mockHistory(uint256 blockNumber, bytes32 blockHash) private {
         vm.mockCall(HISTORY_STORAGE, abi.encode(blockNumber), abi.encode(blockHash));
+    }
+
+    function _assertMissing(bytes memory callData) private {
+        (bool success, bytes memory returnData) = address(platformA).call(callData);
+        assertFalse(success);
+        assertEq(returnData.length, 0);
     }
 
     function _expectedSeed(address target, uint256 requestId, address requester) private view returns (bytes32) {

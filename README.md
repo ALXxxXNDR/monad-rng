@@ -3,7 +3,9 @@
 Monad RNG is an open-source, zero-protocol-fee randomness building block for
 Monad applications. It uses three authenticated future Monad block headers,
 stores the result permanently after Tx2, and keeps every integrating platform
-in its own isolated contract.
+in its own isolated contract. Every V1 instance is ownerless: its name,
+request price, pending limit, and revenue recipient are fixed at deployment,
+with no admin, pause, upgrade, or setter functions.
 
 The included website lets a nondeveloper connect a wallet, deploy a personal
 test instance, make a request, finalize it, and inspect the saved result. It
@@ -16,32 +18,54 @@ does not need an application server.
 
 Read the guides in role order:
 
-1. Product leads and technical owners:
+1. Builders and reviewers using the live Testnet release:
+   [`testnet-deployment.md`](docs/testnet-deployment.md)
+2. Product leads and technical owners:
    [`production-readiness.md`](docs/production-readiness.md)
-2. Application and smart-contract engineers:
+3. Application and smart-contract engineers:
    [`integration-guide.md`](docs/integration-guide.md)
-3. Release and deployment engineers:
+4. Release and deployment engineers:
    [`deployment-and-verification.md`](docs/deployment-and-verification.md)
-4. Operators and support teams:
+5. Operators and support teams:
    [`operations-runbook.md`](docs/operations-runbook.md)
-5. Detailed contract behavior and ABI reference:
+6. Detailed contract behavior and ABI reference:
    [`contract-integration.md`](docs/contract-integration.md)
+
+The tested ownerless Monad Testnet V1 contracts are:
+
+- `PlatformRandomness`: `0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1`
+- `RandomnessFactory`: `0x75E6458DaA0c6152419e4617dcf4D459149C1530`
+
+Use the public Platform for a quick free Testnet flow, or use the Factory to
+deploy an isolated platform instance with permanently fixed settings. In both
+cases, Tx1 and Tx2 must be integrated as one complete flow.
 
 ## What you should know first
 
 - This is **not a cryptographic VRF**. It is authenticated multi-block proposer
   entropy.
+- This V1 has internal repository review, not an external security audit. Only
+  the Monad Testnet baseline is validated until the staged release gates pass.
 - A block proposer knows its own contribution and can choose to skip proposing.
   Three spaced blocks reduce simple single-block influence but cannot remove
   this last-proposer bias.
+- A producer can also affect Tx1 ordering or inclusion timing. Requests from
+  the same block share target headers, so set the value ceiling from their
+  combined exposure, not only one prize.
 - Use it for free, low-value, or economically bounded draws. Use a threshold or
   external VRF when a prize is worth more than the likely cost of influencing
   a block.
 - Protocol fee is always `0`.
 - Each platform chooses its own request price, including `0`.
+- `maxPending == 0` means unlimited; a positive value is a permanent
+  platform-local cap.
 - The wallet that sends each transaction pays that transaction's Monad gas.
-- The authors operate no server, private key, relayer, keeper, treasury, gas
-  sponsor, or subsidy.
+- The protocol has no privileged owner/operator key, relayer, keeper,
+  treasury, gas sponsor, or subsidy. A release deployer key may publish fixed
+  ownerless contracts but gains no authority over them.
+- No always-on server is required by the protocol. A browser or any funded
+  caller can submit Tx2, but production applications still need a reliable
+  operating procedure because contracts cannot execute themselves.
 
 ## Try it step by step
 
@@ -49,8 +73,9 @@ Read the guides in role order:
 2. Add or switch to **Monad Testnet**. Its chain ID is `10143`.
 3. Get test MON from the [official faucet](https://faucet.monad.xyz).
 4. Open Monad RNG and connect the wallet.
-5. Deploy a personal isolated demo contract. Its request price is `0`; the
-   deploying wallet still pays deployment gas.
+5. Deploy a personal isolated demo contract. Its request price is `0`, its
+   configuration can never be edited, and the deploying wallet still pays
+   deployment gas. The deployment wallet receives no admin authority.
 6. Press **Tx1 — request randomness**. Tx1 permanently fixes the requester and
    target blocks at request block `R + 8`, `R + 24`, and `R + 40`.
 7. Wait until block `R + 42`. At the current 300 ms target pace this is roughly
@@ -110,8 +135,10 @@ not wall-clock time, control the contract.
 
 1. Deploy one `PlatformRandomness` instance for the platform, directly or
    through the ownerless `RandomnessFactory`.
-2. Choose the request price and `maxPending` cap. The factory and protocol
-   collect no fee.
+2. Before deployment, choose the permanent `revenueRecipient`,
+   `platformName`, `requestPrice`, and `maxPending`. The factory and protocol
+   collect no fee. There is no later correction transaction; a mistake
+   requires a new V2 address.
 3. In the platform's own purchase or entry flow, bind every paid entry,
    inventory item, and user eligibility decision to one Tx1 request.
 4. Save the `requestId` and three target blocks from `RandomnessRequested`.
@@ -132,17 +159,22 @@ not Sybil protection.
 Every platform contract has separate:
 
 - request IDs and stored results;
-- request revenue and withdrawals;
-- pending-request counter and cap;
-- pause and owner settings.
+- request revenue and its fixed recipient;
+- pending-request counter and fixed cap; and
+- constructor-frozen name and price.
 
 Filling platform A's pending cap does not consume platform B's cap or storage.
 It can still increase shared Monad congestion and gas prices because every
 platform uses the same chain. A request price of zero is useful for demos and
 low-value products, but it makes platform-local Tx1 spam cost only the
-attacker's gas.
+attacker's gas. With a positive finite cap, an attacker can fill every slot
+until requests are finalized or become expirable. With `maxPending == 0`,
+there is no contract cap, so the application must enforce its own rate,
+eligibility, or payment controls.
 
-Pausing blocks only new Tx1 requests. It never blocks Tx2, rescue, or expiry.
+V1 has no pause or cap setter. If intake must stop, remove the V1 address from
+the integrating application. Existing V1 requests remain independently
+finalizable or expirable on-chain.
 
 ## Simultaneous requests and bottlenecks
 
@@ -154,7 +186,7 @@ by that wallet's nonce; different wallets can submit independently.
 
 The practical limits are:
 
-- the chosen platform's `maxPending` cap;
+- a positive platform `maxPending` cap, if configured;
 - Monad block space and gas pricing during congestion;
 - the public RPC provider's published request limits;
 - the fact that Tx2 is never automatic and its sender pays its gas.
@@ -208,8 +240,11 @@ million per-transaction gas limit. Those are network ceilings, not estimates
 of what Monad RNG calls will consume.
 
 The platform request price is separate from gas. It is set by the platform,
-paid exactly in Tx1, retained by that platform contract, and withdrawable only
-by that platform's owner. No amount is routed to the authors.
+paid exactly in Tx1, and retained by that platform contract until
+`withdrawRevenue()` is called. Anyone may call that function, but it always
+sends the entire balance to the one deployment-fixed `revenueRecipient`; the
+caller cannot redirect it. No amount is routed to the authors. Use a recipient
+that can receive MON, because V1 has no recovery or recipient-change function.
 
 ## Run locally
 
@@ -236,12 +271,21 @@ forge test -vv
 node --test tests/randomness-client.test.mjs
 npm test
 npm run lint
-node scripts/smoke-monad-rpc.mjs
+npm run rpc:smoke
 ```
 
 The live smoke check verifies browser CORS, chain ID, a finalized raw RLP
 header, its canonical Keccak block hash, its block-number and mixHash fields,
 and an EIP-2935 hash more than 256 blocks old.
+
+The same check can gate another RPC or Mainnet without changing source:
+
+```bash
+MONAD_RPC_URL="https://rpc.monad.xyz" \
+MONAD_EXPECTED_CHAIN_ID="143" \
+MONAD_HISTORY_AGE="8100" \
+npm run rpc:smoke
+```
 
 Published integration artifacts are under `public/contracts/`. Solidity source
 and tests are under `contracts/`, and the detailed integration guide is

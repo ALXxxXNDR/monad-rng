@@ -407,7 +407,7 @@ export async function recoverDemoDeployment({
 export async function deployDemoPlatform({
   walletClient,
   publicClient,
-  owner,
+  revenueRecipient,
   platformName = "Monad RNG personal demo",
   maxPending = DEFAULT_DEMO_MAX_PENDING,
   artifact,
@@ -416,7 +416,7 @@ export async function deployDemoPlatform({
 }: {
   walletClient: MonadWalletClient;
   publicClient: MonadPublicClient;
-  owner: Address;
+  revenueRecipient: Address;
   platformName?: string;
   maxPending?: bigint;
   artifact?: PlatformArtifact;
@@ -432,7 +432,7 @@ export async function deployDemoPlatform({
 
   try {
     const published = await resolvedArtifact(artifact, fetchImpl);
-    const account = getAddress(owner);
+    const account = getAddress(revenueRecipient);
     const constructorArgs = [
       account,
       platformName.trim() || "Monad RNG personal demo",

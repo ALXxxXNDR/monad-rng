@@ -72,9 +72,14 @@ const RESULT = `0x${"ab".repeat(32)}`;
 const artifact = JSON.parse(
   await readFile(new URL("../public/contracts/PlatformRandomness.json", import.meta.url), "utf8"),
 );
+const factoryArtifact = JSON.parse(
+  await readFile(new URL("../public/contracts/RandomnessFactory.json", import.meta.url), "utf8"),
+);
 const OFFICIAL_RUNTIME_BYTECODE = artifact.runtimeBytecode;
 const OFFICIAL_RUNTIME_HASH =
-  "0x9b6bf6ae53e215ac89420c58ede612b423963c8876e5bfdf8df8b6db59d1c4ce";
+  "0xe5bcd1470da3355bd74a1288e28dc12ab12e6906eeb49d54c9373234ddb55a61";
+const OFFICIAL_FACTORY_RUNTIME_HASH =
+  "0xd2d713b68539ca6949eeb072b607a77f8733a228ffb4f6abaa9603624268e28e";
 
 test("RNG branding keeps the legacy browser state namespace recoverable", () => {
   assert.equal(LOCAL_STATE_KEY, "monad-rnd:state:v1");
@@ -407,6 +412,52 @@ test("published artifact carries the exact official runtime bytecode and keccak2
   assert.doesNotMatch(artifact.runtimeBytecode, /__\$[0-9a-fA-F]{34}\$__/);
 });
 
+test("published ABI is ownerless and exposes only the fixed revenue sweep", () => {
+  const functionNames = new Set(
+    artifact.abi.filter((item) => item.type === "function").map((item) => item.name),
+  );
+  for (const forbidden of [
+    "owner",
+    "setRequestPrice",
+    "setMaxPending",
+    "setRequestsPaused",
+    "requestsPaused",
+    "transferOwnership",
+    "withdraw",
+    "upgradeTo",
+    "pause",
+  ]) {
+    assert.equal(functionNames.has(forbidden), false, `${forbidden} must not exist`);
+  }
+  for (const required of [
+    "CONFIGURATION_LOCKED",
+    "VERSION",
+    "revenueRecipient",
+    "requestPrice",
+    "maxPending",
+    "withdrawRevenue",
+  ]) {
+    assert.equal(functionNames.has(required), true, `${required} must exist`);
+  }
+});
+
+test("published Factory artifact is stateless, ownerless, and reproducible", () => {
+  assert.equal(factoryArtifact.schemaVersion, 2);
+  assert.equal(factoryArtifact.contractName, "RandomnessFactory");
+  assert.equal(factoryArtifact.runtimeBytecodeHash, OFFICIAL_FACTORY_RUNTIME_HASH);
+  assert.equal(
+    keccak256(factoryArtifact.runtimeBytecode),
+    OFFICIAL_FACTORY_RUNTIME_HASH,
+  );
+
+  const functionNames = new Set(
+    factoryArtifact.abi
+      .filter((item) => item.type === "function")
+      .map((item) => item.name),
+  );
+  assert.deepEqual([...functionNames].sort(), ["VERSION", "deployPlatform"]);
+});
+
 test("contract attestation accepts only the exact published runtime", async () => {
   assert.equal(
     await assertCompatibleContract(
@@ -504,7 +555,7 @@ test("published artifact is fetched and demo deployment is zero-price with bound
   const deployment = await deployDemoPlatform({
     walletClient,
     publicClient,
-    owner: OWNER,
+    revenueRecipient: OWNER,
     platformName: "My demo",
     maxPending: DEFAULT_DEMO_MAX_PENDING,
     fetchImpl: artifactFetch(fetchCalls),
@@ -530,7 +581,7 @@ test("published artifact is fetched and demo deployment is zero-price with bound
     deployDemoPlatform({
       walletClient,
       publicClient,
-      owner: OWNER,
+      revenueRecipient: OWNER,
       maxPending: 257n,
       fetchImpl: artifactFetch(),
     }),
@@ -555,7 +606,7 @@ test("deployment gas estimation failure and cap overflow never open the wallet",
           throw new Error("RPC estimate unavailable");
         },
       },
-      owner: OWNER,
+      revenueRecipient: OWNER,
       fetchImpl: artifactFetch(),
     }),
     { code: "GAS_ESTIMATION_FAILED" },
@@ -570,7 +621,7 @@ test("deployment gas estimation failure and cap overflow never open the wallet",
           return 5_000_001n;
         },
       },
-      owner: OWNER,
+      revenueRecipient: OWNER,
       fetchImpl: artifactFetch(),
     }),
     { code: "GAS_LIMIT_EXCEEDED" },

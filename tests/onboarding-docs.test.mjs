@@ -8,6 +8,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
 const publishedGuideFiles = [
+  "testnet-deployment.md",
   "production-readiness.md",
   "integration-guide.md",
   "deployment-and-verification.md",
@@ -22,14 +23,21 @@ test("publisher copies every onboarding guide byte for byte", async () => {
   );
 
   try {
-    const { guideFiles, publishOnboardingDocs } = await import(
+    const {
+      deploymentManifestFile,
+      guideFiles,
+      publishOnboardingDocs,
+    } = await import(
       new URL("../scripts/publish-onboarding-docs.mjs", import.meta.url)
     );
     assert.deepEqual(guideFiles, publishedGuideFiles);
+    assert.equal(deploymentManifestFile, "monad-testnet-v1.json");
+    const manifestOutputDirectory = join(outputDirectory, "deployments");
 
     await publishOnboardingDocs({
       root: fileURLToPath(root),
       outputDirectory,
+      manifestOutputDirectory,
     });
 
     await Promise.all(
@@ -40,6 +48,15 @@ test("publisher copies every onboarding guide byte for byte", async () => {
         ]);
         assert.deepEqual(published, canonical, `${file} must be an exact copy`);
       }),
+    );
+    const [canonicalManifest, publishedManifest] = await Promise.all([
+      readFile(new URL("deployments/monad-testnet-v1.json", root)),
+      readFile(join(manifestOutputDirectory, deploymentManifestFile)),
+    ]);
+    assert.deepEqual(
+      publishedManifest,
+      canonicalManifest,
+      "the public deployment manifest must be an exact copy",
     );
   } finally {
     await rm(outputDirectory, { recursive: true, force: true });
@@ -89,6 +106,14 @@ test("readiness guide limits validation to Monad Testnet and requires a fresh ma
   assert.match(guide, /mainnet[\s\S]{0,400}independent security review/i);
 });
 
+test("RPC smoke logs never expose a configured credential-bearing URL", async () => {
+  const source = await read("scripts/smoke-monad-rpc.mjs");
+  assert.match(source, /publicRpcLabel\(RPC_URL\)/);
+  assert.doesNotMatch(source, /console\.log\(`rpc: \$\{RPC_URL\}`\)/);
+  assert.doesNotMatch(source, /error\.stack/);
+  assert.match(source, /provider details were suppressed to protect credentials/);
+});
+
 test("integration guide covers direct and wrapper requester semantics", async () => {
   const guide = await read("docs/integration-guide.md");
   assert.match(guide, /R\+8[^\n]*R\+24[^\n]*R\+40/i);
@@ -100,15 +125,81 @@ test("integration guide covers direct and wrapper requester semantics", async ()
   assert.match(guide, /entryId[^\n]*requestId[^\n]*player/i);
 });
 
-test("deployment guide verifies code, address, owner, and configuration separately", async () => {
+test("deployment guide verifies code, address, fixed configuration, and ownerless ABI separately", async () => {
   const guide = await read("docs/deployment-and-verification.md");
   assert.match(guide, /chain ID[^\n]*10143/i);
   assert.match(guide, /runtime hash/i);
   assert.match(guide, /approved address/i);
-  assert.match(guide, /owner/i);
+  assert.match(guide, /no owner/i);
+  assert.match(guide, /revenueRecipient/);
   assert.match(guide, /requestPrice/);
   assert.match(guide, /maxPending/);
   assert.match(guide, /deployment manifest/i);
+});
+
+test("live Testnet deployment guide publishes exact ownerless addresses and completed Tx1 plus Tx2 evidence", async () => {
+  const guide = await read("docs/testnet-deployment.md");
+  assert.match(guide, /0x22A5Ed6bA91661cd06D68FBa5aae5015EDbF7DA1/);
+  assert.match(guide, /0x75E6458DaA0c6152419e4617dcf4D459149C1530/);
+  assert.match(guide, /permissionless historical rescue/i);
+  assert.match(guide, /pendingCount[\s\S]{0,60}zero/i);
+  assert.match(guide, /Tx2 is never automatic/i);
+  assert.match(guide, /no owner, admin, pause, setter, proxy, upgrade/i);
+});
+
+test("the Testnet manifest stays consistent with artifacts, docs, and the post-canary finalized observation", async () => {
+  const [
+    manifestText,
+    platformArtifactText,
+    factoryArtifactText,
+    readme,
+    guide,
+    integratePage,
+  ] = await Promise.all([
+    read("deployments/monad-testnet-v1.json"),
+    read("public/contracts/PlatformRandomness.json"),
+    read("public/contracts/RandomnessFactory.json"),
+    read("README.md"),
+    read("docs/testnet-deployment.md"),
+    read("app/integrate/page.tsx"),
+  ]);
+  const manifest = JSON.parse(manifestText);
+  const platformArtifact = JSON.parse(platformArtifactText);
+  const factoryArtifact = JSON.parse(factoryArtifactText);
+
+  assert.equal(manifest.network.chainId, 10143);
+  assert.equal(
+    manifest.platform.runtimeBytecodeHash,
+    platformArtifact.runtimeBytecodeHash,
+  );
+  assert.equal(
+    manifest.factory.runtimeBytecodeHash,
+    factoryArtifact.runtimeBytecodeHash,
+  );
+  assert.equal(manifest.platform.configurationLocked, true);
+  assert.equal(manifest.platform.protocolFeeWei, "0");
+  assert.equal(manifest.platform.requestPriceWei, "0");
+  assert.equal(manifest.platform.maxPending, "0");
+  assert.equal(manifest.platform.ownerless, true);
+  assert.equal(manifest.factory.ownerless, true);
+  assert.equal(manifest.canary.pendingCountAfterTests, "0");
+  assert.ok(
+    manifest.attestation.commonFinalizedBlock >
+      manifest.platform.deploymentBlock,
+  );
+  assert.ok(
+    manifest.canary.finalizedObservation.commonFinalizedBlock >
+      Math.max(
+        manifest.canary.requesterFinalization.finalizationBlock,
+        manifest.canary.permissionlessHistoricalRescue.finalizationBlock,
+      ),
+  );
+
+  for (const source of [readme, guide, integratePage]) {
+    assert.ok(source.includes(manifest.platform.address));
+    assert.ok(source.includes(manifest.factory.address));
+  }
+  assert.match(integratePage, /href="\/deployments\/monad-testnet-v1\.json"/);
 });
 
 test("direct deployment validates both transports, pins the chain, and narrows bytecode", async () => {

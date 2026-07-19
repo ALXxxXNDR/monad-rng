@@ -19,6 +19,11 @@ request identity:
 Tx2, a keeper, permissionless rescue, and expiry are **not automatic**. Every
 transaction needs an external caller and Monad gas.
 
+The protocol itself needs no application server. A browser, script, serverless
+job, community participant, or keeper may supply Tx2. Production teams may run
+automation for reliability, but automation is optional infrastructure rather
+than a contract dependency.
+
 ## Choose direct EOA or wrapper mode
 
 The address that calls `PlatformRandomness.requestRandomness` is permanently
@@ -46,22 +51,35 @@ expose a wrapper forwarding function.
 ## Deploy or select one isolated platform contract
 
 Use one approved `PlatformRandomness` instance for the integrating platform.
-Its request IDs, pending count, cap, price, pause state, owner, and balance are
-isolated from every other instance.
+Its request IDs, pending count, fixed cap, fixed price, fixed revenue
+recipient, and balance are isolated from every other instance.
 
 Before enabling Tx1, pin and verify:
 
 - the expected network and chain ID;
 - the approved platform contract address and exact runtime code;
-- the platform owner or multisig;
-- `platformName`, `requestPrice`, `maxPending`, and `requestsPaused`; and
+- `revenueRecipient`, `platformName`, `requestPrice`, and `maxPending`;
+- the absence of an owner, admin, pause, proxy, upgrade, and setter path; and
 - the deployment transaction, source revision, build profile, and verification
   evidence.
 
 `protocolFee()` is permanently `0`, but every deployment, Tx1, Tx2, rescue,
-expiry, and administration sender pays Monad gas unless the application
-separately sponsors it. Set `maxPending` from tested operational capacity;
-`maxPending == 0` rejects every new request.
+expiry, and revenue-sweep sender pays Monad gas unless the application
+separately sponsors it. A positive `maxPending` must come from tested
+operational capacity; `maxPending == 0` means unlimited.
+
+All four configuration values are constructor-frozen. They are intentionally
+stored in normal storage so different instances have identical runtime code.
+A matching runtime hash does not prove the configuration or approved address:
+read every field from the candidate instance. The deployment wallet has no
+post-deployment authority. If any value is wrong, reject the instance and
+deploy a new version.
+
+For a zero-price platform, a finite cap can be cheaply filled by Sybil
+requests; those slots remain occupied until someone finalizes them or they
+become expirable. Unlimited mode avoids cap lockout but permits unbounded
+platform-local state growth paid for by request senders. Add eligibility,
+rate, payment, or wrapper controls according to the product threat model.
 
 The repository's Monad Testnet browser application is a reference demo, not a
 production SDK or proof that an arbitrary address is approved for your
@@ -303,6 +321,11 @@ read the request and entry state before submitting, simulate the exact call,
 record the sender and nonce, and treat an already finalized request as success
 to reconcile rather than as a reason to create another Tx1.
 
+An RPC used for this job must implement `debug_getRawHeader`; ordinary block
+JSON is not a substitute for the exact RLP bytes accepted by Tx2. Browser-only
+integrations must also verify that the endpoint permits the deployed origin
+through CORS.
+
 ## Read the permanent result
 
 After finalized confirmation:
@@ -380,6 +403,24 @@ Web Locks and `localStorage` are demo-only. They coordinate neither devices nor
 servers, have limited retention, and are not a production ledger, queue,
 keeper, or transaction journal.
 
+## Handle revenue and immutable configuration
+
+Every Tx1 sends the exact fixed `requestPrice` to the platform instance. Anyone
+may call `withdrawRevenue()`, but the function always transfers the entire
+balance to the one fixed `revenueRecipient`. The caller cannot redirect
+revenue, select another recipient, or receive a protocol reward.
+
+Use an EOA or a reviewed contract that can accept native MON. If the address is
+wrong or its receive path reverts, there is no admin recovery. Likewise, the
+name, price, cap, and recipient cannot be changed, and V1 cannot be paused or
+upgraded.
+
+For V2 migration, stop all new V1 business actions at the application layer,
+continue finalizing or expiring every existing V1 request, deploy and verify a
+new address, then route only new actions to V2. Never reinterpret
+`(V1 address, requestId)` as a V2 request. Finalized results remain readable at
+their original address without a time limit.
+
 ## Launch checklist
 
 - [ ] The product treats Tx1 and Tx2 as one flow and never awards value after
@@ -397,8 +438,13 @@ keeper, or transaction journal.
 - [ ] Expiry accounting and customer compensation are approved and tested.
 - [ ] The durable journal prevents duplicate Tx1 and recovers sender/nonce and
       replacement state without relying on a timeout.
-- [ ] Chain, approved address, runtime code, owner, price, cap, pause state,
-      source, and RPC capabilities are verified.
+- [ ] Chain, approved address, runtime code, fixed recipient/name/price/cap,
+      ownerless interface, source, and RPC capabilities are verified
+      independently.
+- [ ] The team accepts that V1 has no admin, pause, setter, recovery, or
+      upgrade; a configuration or code change uses a new V2 address.
+- [ ] Zero-price spam, finite-cap lockout, unlimited-mode growth, and expiry
+      capacity have explicit product controls.
 - [ ] The approved value ceiling is documented; higher-value actions use an
       external VRF or threshold randomness because this primitive is not a
       cryptographic VRF.
