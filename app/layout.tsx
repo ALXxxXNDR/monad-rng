@@ -83,8 +83,8 @@ export async function generateMetadata(): Promise<Metadata> {
       images: [
         {
           url: socialImage,
-          width: 1_731,
-          height: 909,
+          width: 1_721,
+          height: 914,
           alt: "Monad RND public randomness for Monad",
         },
       ],
