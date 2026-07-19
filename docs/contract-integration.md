@@ -56,6 +56,14 @@ of the following in the same Tx1:
 5. store exactly one returned `requestId` against that entry;
 6. forbid cancellation, replacement, and retry based on the later result.
 
+> **Wrapper requester warning:** at `PlatformRandomness`, `msg.sender` is the
+> wrapper, so the wrapper—not the player EOA—is stored as the requester. The
+> player EOA cannot directly call requester-window Tx2. The wrapper must expose
+> a forwarding function that calls `finalizeRandomness` and must keep its own
+> `requestId → player/entry` mapping. Without that forwarding path, direct
+> permissionless platform finalization by another address is delayed until
+> `R+104`.
+
 Do not let a player create many free request IDs and redeem only a favorable
 one. `requestId` is included in the seed, so multiple requests produce multiple
 outcomes even when their target blocks are identical. `maxPending` limits local
