@@ -5,17 +5,15 @@ import {MonadHeaderReader} from "./MonadHeaderReader.sol";
 
 contract PlatformRandomness {
     address public constant HISTORY_STORAGE = 0x0000F90827F1C53a10cb7A02335B175320002935;
+    uint256 public constant VERSION = 1;
+    bool public constant CONFIGURATION_LOCKED = true;
     string internal constant DRAW_DOMAIN = "MONAD_PUBLIC_RANDOMNESS_DRAW_V1";
 
-    error InvalidOwner();
-    error Unauthorized();
+    error InvalidRevenueRecipient();
     error IncorrectPayment(uint256 expected, uint256 received);
-    error RequestsArePaused();
     error PendingLimitReached();
-    error MaxPendingBelowPending(uint256 proposed, uint256 currentPending);
     error RequestNotFound();
-    error InvalidRecipient();
-    error InsufficientBalance(uint256 available, uint256 requested);
+    error NoRevenue();
     error Reentrancy();
     error TransferFailed();
     error FinalizationTooEarly(uint256 currentBlock, uint256 firstAllowedBlock);
@@ -75,27 +73,17 @@ contract PlatformRandomness {
         uint256 indexed requestId, address indexed requester, address indexed finalizer, bytes32 result
     );
     event RandomnessRequestExpired(uint256 indexed requestId, address indexed requester, address indexed expirer);
-    event RequestPriceUpdated(uint256 oldPrice, uint256 newPrice);
-    event MaxPendingUpdated(uint256 oldMaxPending, uint256 newMaxPending);
-    event RequestsPausedUpdated(bool paused);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event RevenueWithdrawn(address indexed recipient, uint256 amount);
+    event RevenueWithdrawn(address indexed caller, address indexed recipient, uint256 amount);
 
-    address public owner;
+    address public revenueRecipient;
     string public platformName;
     uint256 public requestPrice;
     uint256 public maxPending;
     uint256 public pendingCount;
     uint256 public nextRequestId = 1;
-    bool public requestsPaused;
 
     mapping(uint256 requestId => StoredRequest request) private requests;
     bool private withdrawalEntered;
-
-    modifier onlyOwner() {
-        _requireOwner();
-        _;
-    }
 
     modifier nonReentrantWithdrawal() {
         _enterWithdrawal();
@@ -103,30 +91,28 @@ contract PlatformRandomness {
         _exitWithdrawal();
     }
 
-    constructor(address owner_, string memory platformName_, uint256 requestPrice_, uint256 maxPending_) {
-        if (owner_ == address(0)) {
-            revert InvalidOwner();
+    /// @notice Deploy-time configuration is permanent. This contract has no owner,
+    /// admin, pause, upgrade, delegatecall, or configuration setter.
+    constructor(address revenueRecipient_, string memory platformName_, uint256 requestPrice_, uint256 maxPending_) {
+        if (revenueRecipient_ == address(0)) {
+            revert InvalidRevenueRecipient();
         }
         if (requestPrice_ > type(uint96).max) {
             revert PriceTooLarge(requestPrice_);
         }
 
-        owner = owner_;
+        revenueRecipient = revenueRecipient_;
         platformName = platformName_;
         requestPrice = requestPrice_;
         maxPending = maxPending_;
-
-        emit OwnershipTransferred(address(0), owner_);
     }
 
     function requestRandomness() external payable returns (uint256 requestId) {
-        if (requestsPaused) {
-            revert RequestsArePaused();
-        }
         if (msg.value != requestPrice) {
             revert IncorrectPayment(requestPrice, msg.value);
         }
-        if (pendingCount >= maxPending) {
+        // A zero cap is an explicit, permanently configured "unlimited" mode.
+        if (maxPending != 0 && pendingCount >= maxPending) {
             revert PendingLimitReached();
         }
         if (block.number > uint256(type(uint64).max) - 40) {
@@ -261,57 +247,21 @@ contract PlatformRandomness {
         return _draw(request.result, upperBound);
     }
 
-    function setRequestPrice(uint256 newPrice) external onlyOwner {
-        if (newPrice > type(uint96).max) {
-            revert PriceTooLarge(newPrice);
+    /// @notice Anyone may trigger a sweep, but funds can only ever reach the
+    /// revenue recipient permanently selected at deployment.
+    function withdrawRevenue() external nonReentrantWithdrawal {
+        uint256 amount = address(this).balance;
+        if (amount == 0) {
+            revert NoRevenue();
         }
 
-        uint256 oldPrice = requestPrice;
-        requestPrice = newPrice;
-        emit RequestPriceUpdated(oldPrice, newPrice);
-    }
-
-    function setMaxPending(uint256 newMaxPending) external onlyOwner {
-        if (newMaxPending < pendingCount) {
-            revert MaxPendingBelowPending(newMaxPending, pendingCount);
-        }
-
-        uint256 oldMaxPending = maxPending;
-        maxPending = newMaxPending;
-        emit MaxPendingUpdated(oldMaxPending, newMaxPending);
-    }
-
-    function setRequestsPaused(bool paused) external onlyOwner {
-        requestsPaused = paused;
-        emit RequestsPausedUpdated(paused);
-    }
-
-    function withdraw(address payable recipient, uint256 amount) external onlyOwner nonReentrantWithdrawal {
-        if (recipient == address(0)) {
-            revert InvalidRecipient();
-        }
-
-        uint256 available = address(this).balance;
-        if (amount > available) {
-            revert InsufficientBalance(available, amount);
-        }
-
-        (bool success,) = recipient.call{value: amount}("");
+        address recipient = revenueRecipient;
+        (bool success,) = payable(recipient).call{value: amount}("");
         if (!success) {
             revert TransferFailed();
         }
 
-        emit RevenueWithdrawn(recipient, amount);
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) {
-            revert InvalidOwner();
-        }
-
-        address previousOwner = owner;
-        owner = newOwner;
-        emit OwnershipTransferred(previousOwner, newOwner);
+        emit RevenueWithdrawn(msg.sender, recipient, amount);
     }
 
     function protocolFee() external pure returns (uint256) {
@@ -403,12 +353,6 @@ contract PlatformRandomness {
 
         assembly ("memory-safe") {
             historicalHash := mload(add(returnData, 0x20))
-        }
-    }
-
-    function _requireOwner() private view {
-        if (msg.sender != owner) {
-            revert Unauthorized();
         }
     }
 

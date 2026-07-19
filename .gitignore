@@ -27,6 +27,14 @@
 *.jks
 *.keystore
 keystore*.json
+*.mnemonic
+*.seed
+*.credentials
+/keystores/
+/wallets/
+/secrets/
+/.direnv/
+.envrc
 .npmrc
 .netrc
 
@@ -55,6 +63,8 @@ next-env.d.ts
 
 # foundry
 /cache/
+/cache-*/
 /contracts/out/
+/contracts/out-*/
 /broadcast/
 /contracts/broadcast/

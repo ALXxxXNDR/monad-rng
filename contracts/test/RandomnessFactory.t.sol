@@ -22,17 +22,19 @@ contract RandomnessFactoryTest is Test {
         vm.deal(bob, 20 ether);
     }
 
-    function test_DeployPlatformCreatesCallerOwnedZeroFeeInstanceAndEmitsDiscoveryEvent() public {
+    function test_DeployPlatformCreatesOwnerlessFixedRecipientInstanceAndEmitsDiscoveryEvent() public {
         vm.recordLogs();
         vm.prank(alice);
-        PlatformRandomness platform = factory.deployPlatform("Demo", 0, 128);
+        PlatformRandomness platform = factory.deployPlatform(bob, "Demo", 0, 128);
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
-        assertEq(platform.owner(), alice);
+        assertEq(platform.revenueRecipient(), bob);
         assertEq(platform.platformName(), "Demo");
         assertEq(platform.requestPrice(), 0);
         assertEq(platform.maxPending(), 128);
         assertEq(platform.protocolFee(), 0);
+        assertEq(platform.VERSION(), 1);
+        assertTrue(platform.CONFIGURATION_LOCKED());
         assertGt(address(platform).code.length, 0);
 
         uint256 deploymentEvents;
@@ -44,7 +46,7 @@ contract RandomnessFactoryTest is Test {
 
             ++deploymentEvents;
             assertEq(address(uint160(uint256(entry.topics[1]))), address(platform));
-            assertEq(address(uint160(uint256(entry.topics[2]))), alice);
+            assertEq(address(uint160(uint256(entry.topics[2]))), bob);
             (string memory name, uint256 price, uint256 cap) = abi.decode(entry.data, (string, uint256, uint256));
             assertEq(name, "Demo");
             assertEq(price, 0);
@@ -55,8 +57,8 @@ contract RandomnessFactoryTest is Test {
 
     function test_DeployedPlatformsIsolateCountersFundsAndPendingCaps() public {
         vm.startPrank(alice);
-        PlatformRandomness platformA = factory.deployPlatform("Platform A", 1 ether, 1);
-        PlatformRandomness platformB = factory.deployPlatform("Platform B", 2 ether, 2);
+        PlatformRandomness platformA = factory.deployPlatform(alice, "Platform A", 1 ether, 1);
+        PlatformRandomness platformB = factory.deployPlatform(bob, "Platform B", 2 ether, 2);
 
         uint256 aFirst = platformA.requestRandomness{value: 1 ether}();
         uint256 bFirst = platformB.requestRandomness{value: 2 ether}();
@@ -89,10 +91,11 @@ contract RandomnessFactoryTest is Test {
         _assertMissing(abi.encodeWithSignature("withdraw(address,uint256)", alice, 1));
         _assertMissing(abi.encodeWithSignature("upgradeTo(address)", bob));
         _assertMissing(abi.encodeWithSignature("transferOwnership(address)", bob));
+        assertEq(factory.VERSION(), 1);
     }
 
     function test_FactoryDeploymentPathIsNonpayableAndRetainsNoMon() public {
-        bytes memory callData = abi.encodeWithSelector(RandomnessFactory.deployPlatform.selector, "Demo", 0, 128);
+        bytes memory callData = abi.encodeWithSelector(RandomnessFactory.deployPlatform.selector, alice, "Demo", 0, 128);
 
         vm.prank(alice);
         (bool success,) = address(factory).call{value: 1 wei}(callData);

@@ -1,17 +1,34 @@
 import { fromRlp, keccak256 } from "viem";
 
-const RPC_URL = "https://testnet-rpc.monad.xyz";
-const CHAIN_ID = 10_143n;
-const BROWSER_ORIGIN = "https://monad-rng.example";
+const RPC_URL = process.env.MONAD_RPC_URL ?? "https://testnet-rpc.monad.xyz";
+const CHAIN_ID = BigInt(process.env.MONAD_EXPECTED_CHAIN_ID ?? "10143");
+const BROWSER_ORIGIN =
+  process.env.MONAD_BROWSER_ORIGIN ?? "https://monad-rng.example";
 const HISTORY_STORAGE = "0x0000F90827F1C53a10cb7A02335B175320002935";
-const HISTORICAL_AGE = 300n;
+const HISTORICAL_AGE = BigInt(process.env.MONAD_HISTORY_AGE ?? "300");
 const REQUEST_TIMEOUT_MS = 15_000;
 
 let rpcRequestId = 0;
 
+class SmokeCheckError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "SmokeCheckError";
+  }
+}
+
 function assert(condition, message) {
   if (!condition) {
-    throw new Error(message);
+    throw new SmokeCheckError(message);
+  }
+}
+
+function publicRpcLabel(value) {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return "(configured RPC)";
   }
 }
 
@@ -84,7 +101,7 @@ async function rpc(method, params = []) {
 
   const payload = await response.json();
   assert(payload && typeof payload === "object", `${method} returned invalid JSON`);
-  assert(!payload.error, `${method} RPC error: ${JSON.stringify(payload.error)}`);
+  assert(!payload.error, `${method} RPC returned an error`);
   assert("result" in payload, `${method} response omitted result`);
   return payload.result;
 }
@@ -122,8 +139,8 @@ async function main() {
   let headerFields;
   try {
     headerFields = fromRlp(rawHeader, "hex");
-  } catch (error) {
-    throw new Error("debug_getRawHeader returned invalid RLP", { cause: error });
+  } catch {
+    throw new SmokeCheckError("debug_getRawHeader returned invalid RLP");
   }
 
   assert(Array.isArray(headerFields), "Raw header is not an RLP list");
@@ -175,7 +192,8 @@ async function main() {
     "EIP-2935 history hash does not match the canonical historical block",
   );
 
-  console.log("Monad testnet RPC smoke check passed");
+  console.log("Monad RPC smoke check passed");
+  console.log(`rpc: ${publicRpcLabel(RPC_URL)}`);
   console.log(`chainId: ${liveChainId} (${chainIdHex})`);
   console.log(`browser CORS: OPTIONS and POST allowed for ${BROWSER_ORIGIN}`);
   console.log(
@@ -192,7 +210,11 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("Monad testnet RPC smoke check FAILED");
-  console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+  console.error("Monad RPC smoke check FAILED");
+  console.error(
+    error instanceof SmokeCheckError
+      ? error.message
+      : "Unexpected RPC failure; provider details were suppressed to protect credentials.",
+  );
   process.exitCode = 1;
 });

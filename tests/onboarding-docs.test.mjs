@@ -89,6 +89,14 @@ test("readiness guide limits validation to Monad Testnet and requires a fresh ma
   assert.match(guide, /mainnet[\s\S]{0,400}independent security review/i);
 });
 
+test("RPC smoke logs never expose a configured credential-bearing URL", async () => {
+  const source = await read("scripts/smoke-monad-rpc.mjs");
+  assert.match(source, /publicRpcLabel\(RPC_URL\)/);
+  assert.doesNotMatch(source, /console\.log\(`rpc: \$\{RPC_URL\}`\)/);
+  assert.doesNotMatch(source, /error\.stack/);
+  assert.match(source, /provider details were suppressed to protect credentials/);
+});
+
 test("integration guide covers direct and wrapper requester semantics", async () => {
   const guide = await read("docs/integration-guide.md");
   assert.match(guide, /R\+8[^\n]*R\+24[^\n]*R\+40/i);
@@ -100,12 +108,13 @@ test("integration guide covers direct and wrapper requester semantics", async ()
   assert.match(guide, /entryId[^\n]*requestId[^\n]*player/i);
 });
 
-test("deployment guide verifies code, address, owner, and configuration separately", async () => {
+test("deployment guide verifies code, address, fixed configuration, and ownerless ABI separately", async () => {
   const guide = await read("docs/deployment-and-verification.md");
   assert.match(guide, /chain ID[^\n]*10143/i);
   assert.match(guide, /runtime hash/i);
   assert.match(guide, /approved address/i);
-  assert.match(guide, /owner/i);
+  assert.match(guide, /no owner/i);
+  assert.match(guide, /revenueRecipient/);
   assert.match(guide, /requestPrice/);
   assert.match(guide, /maxPending/);
   assert.match(guide, /deployment manifest/i);

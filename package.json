@@ -26,9 +26,12 @@
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "build:vercel": "npm run docs:publish && next build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/randomness-client.test.mjs tests/randomness-demo-safety.test.mjs tests/rendered-html.test.mjs tests/onboarding-docs.test.mjs",
+    "test": "npm run build && node --test tests/randomness-client.test.mjs tests/randomness-demo-safety.test.mjs tests/rendered-html.test.mjs tests/onboarding-docs.test.mjs tests/deployment-attestation.test.mjs tests/monad-testnet-e2e-tool.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vinext --ignore-pattern .wrangler --ignore-pattern work --ignore-pattern contracts/out",
-    "contracts:export": "forge build && node scripts/export-contract-artifact.mjs"
+    "contracts:export": "forge build && node scripts/export-contract-artifact.mjs",
+    "rpc:smoke": "node scripts/smoke-monad-rpc.mjs",
+    "deployment:attest": "node scripts/attest-monad-deployment.mjs",
+    "e2e:testnet": "node scripts/monad-testnet-e2e.mjs"
   },
   "dependencies": {
     "next": "16.2.6",

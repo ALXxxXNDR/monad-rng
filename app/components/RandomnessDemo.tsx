@@ -1444,7 +1444,7 @@ export function RandomnessDemo() {
           await deployDemoPlatform({
             walletClient,
             publicClient,
-            owner: currentAccount,
+            revenueRecipient: currentAccount,
             onTransactionHash: async (transactionHash) => {
               broadcastHash = transactionHash;
               setDeploymentHash(transactionHash);
@@ -3079,7 +3079,7 @@ export function RandomnessDemo() {
         <div className="public-good-copy">
           <p>
             The contracts charge no protocol fee and keep no author treasury.
-            Integrating platforms own their instance, choose their own price, and
+            Integrating platforms operate an isolated instance, choose its fixed price, and
             keep their own storage, counters, caps, and revenue isolated.
           </p>
           <div className="source-links">
