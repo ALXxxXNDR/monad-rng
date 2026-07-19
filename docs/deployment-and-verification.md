@@ -80,19 +80,40 @@ published artifact. It assumes the team has already created a Testnet
 Adjust the import path for the deployment program.
 
 ```ts
+import type { Hex } from "viem";
+import { monadTestnet } from "viem/chains";
 import artifact from "../public/contracts/PlatformRandomness.json" with {
   type: "json",
 };
 
-const chainId = await publicClient.getChainId();
-if (chainId !== 10143) {
-  throw new Error(`Wrong chain: expected 10143, received ${chainId}`);
+function assertHex(value: string, label: string): asserts value is Hex {
+  if (!/^0x(?:[0-9a-fA-F]{2})+$/.test(value)) {
+    throw new Error(`${label} must be non-empty, even-length 0x-prefixed hex`);
+  }
+}
+
+assertHex(artifact.bytecode, "PlatformRandomness creation bytecode");
+const creationBytecode = artifact.bytecode;
+
+const [publicChainId, walletChainId] = await Promise.all([
+  publicClient.getChainId(),
+  walletClient.getChainId(),
+]);
+if (
+  publicChainId !== monadTestnet.id ||
+  walletChainId !== monadTestnet.id
+) {
+  throw new Error(
+    `Wrong chain: expected ${monadTestnet.id}, ` +
+      `public RPC reported ${publicChainId}, wallet reported ${walletChainId}`,
+  );
 }
 
 const deploymentTransaction = await walletClient.deployContract({
   account,
+  chain: monadTestnet,
   abi: artifact.abi,
-  bytecode: artifact.bytecode,
+  bytecode: creationBytecode,
   args: [
     approvedOwner,
     "Example platform",
@@ -115,10 +136,16 @@ console.log({
 });
 ```
 
-Before signing, compare all four constructor arguments with the approved
-change ticket. After inclusion, wait until the receipt block is covered by the
-RPC's `finalized` block tag. Record the transaction, block, and candidate
-contract address; do not yet publish it as the approved address.
+The two `getChainId` calls check the actual public and wallet transports
+immediately before signing. Supplying `chain: monadTestnet` also binds the
+deployment action to Monad Testnet so Viem rejects a wallet on another chain.
+The complete assertion helper validates the JSON string and narrows it to
+Viem's `Hex` type before `deployContract`.
+
+Before signing, compare all four constructor arguments with the approved change
+ticket. After inclusion, wait until the receipt block is covered by the RPC's
+`finalized` block tag. Record the transaction, block, and candidate contract
+address; do not yet publish it as the approved address.
 
 ## Factory deployment
 
@@ -271,10 +298,11 @@ Use a low-value Testnet action on the exact candidate address:
 4. At or after `R+42`, retrieve all three canonical raw headers with a
    health-checked RPC's `debug_getRawHeader`. Preserve their exact RLP bytes
    and submit requester-window Tx2.
-5. Wait until Tx2 is finalized. Require one matching `RandomnessFinalized`
-   event and verify `getRequest(requestId)` reports the expected requester,
-   finalizer, permanent nonzero result, `finalized == true`, and
-   `expired == false`.
+5. Wait until Tx2 is finalized. Require the `RandomnessFinalized` event result
+   to equal `getRequest(requestId).result`, the stored result, exactly. Also
+   verify the expected requester, finalizer, `finalized == true`, and
+   `expired == false`. `bytes32(0)` is a valid cryptographic output, so never
+   use a nonzero check as proof of finalization.
 6. Call `draw(requestId, upperBound)` twice with the same valid bound and
    require the same in-range result. Do not use raw modulo in the product.
 7. Confirm the application's journal, monitoring, settlement idempotency, RPC

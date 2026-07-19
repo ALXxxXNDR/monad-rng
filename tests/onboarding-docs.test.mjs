@@ -36,6 +36,25 @@ test("deployment guide verifies code, address, owner, and configuration separate
   assert.match(guide, /deployment manifest/i);
 });
 
+test("direct deployment validates both transports, pins the chain, and narrows bytecode", async () => {
+  const guide = await read("docs/deployment-and-verification.md");
+  assert.match(guide, /publicClient\.getChainId\(\)/);
+  assert.match(guide, /walletClient\.getChainId\(\)/);
+  assert.match(guide, /chain:\s*monadTestnet/);
+  assert.match(guide, /asserts value is Hex/);
+  assert.match(guide, /0x\(\?:\[0-9a-fA-F\]\{2\}\)\+/);
+  assert.match(guide, /bytecode:\s*creationBytecode/);
+});
+
+test("canary accepts a zero seed and compares the event result with storage", async () => {
+  const guide = await read("docs/deployment-and-verification.md");
+  assert.doesNotMatch(guide, /nonzero result/i);
+  assert.match(
+    guide,
+    /RandomnessFinalized[\s\S]{0,300}event result[\s\S]{0,120}stored result/i,
+  );
+});
+
 test("operations guide has a non-automatic Tx2 and nonce recovery runbook", async () => {
   const guide = await read("docs/operations-runbook.md");
   assert.match(guide, /Tx1[^\n]*Tx2/i);
