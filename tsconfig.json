@@ -30,5 +30,16 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    ".superpowers",
+    ".vinext",
+    ".wrangler",
+    "build",
+    "contracts",
+    "dist",
+    "work",
+    "worker",
+    "vite.config.ts"
+  ]
 }
