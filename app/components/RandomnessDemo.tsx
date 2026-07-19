@@ -2432,6 +2432,7 @@ export function RandomnessDemo() {
           <small>Public good · v1</small>
         </a>
         <nav aria-label="Primary navigation">
+          <a href="/integrate">Integrate</a>
           <a href="#demo">Demo</a>
           <a href="#security">Security</a>
           <a href="#explorer">Explorer</a>
@@ -2470,6 +2471,12 @@ export function RandomnessDemo() {
           <div className="hero-actions">
             <a className="button button--primary" href="#demo">
               Run the two-transaction demo
+            </a>
+            <a
+              className="button button--secondary"
+              href="/integrate"
+            >
+              Integration guide
             </a>
             <a
               className="button button--quiet"
@@ -3073,6 +3080,7 @@ export function RandomnessDemo() {
             keep their own storage, counters, caps, and revenue isolated.
           </p>
           <div className="source-links">
+            <a href="/integrate">Platform onboarding →</a>
             <a href="/contracts/PlatformRandomness.sol">Solidity source ↓</a>
             <a href="/contracts/PlatformRandomness.json">ABI + bytecode ↓</a>
             <a

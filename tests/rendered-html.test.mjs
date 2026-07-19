@@ -6,13 +6,13 @@ const developmentPreviewMeta =
   /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
 const templateRoot = new URL("../", import.meta.url);
 
-async function render() {
+async function render(pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${pathname}`, {
       headers: {
         accept: "text/html",
         "x-forwarded-host": "localhost",
@@ -62,6 +62,14 @@ test("server-renders the complete Monad RND public-good landing page", async () 
   assert.match(html, /1–100 draw/);
   assert.match(
     html,
+    /<nav[^>]*aria-label="Primary navigation"[^>]*>(?:(?!<\/nav>)[\s\S])*?<a[^>]*href="\/integrate"[^>]*>Integrate<\/a>/i,
+  );
+  assert.match(
+    html,
+    /<a(?=[^>]*class="[^"]*\bbutton\b[^"]*\bbutton--secondary\b[^"]*")(?=[^>]*href="\/integrate")[^>]*>Integration guide<\/a>/i,
+  );
+  assert.match(
+    html,
     /<meta(?=[^>]*property="og:image")(?=[^>]*content="http:\/\/localhost\/og\.png")[^>]*>/i,
   );
   assert.match(
@@ -72,6 +80,22 @@ test("server-renders the complete Monad RND public-good landing page", async () 
   assert.doesNotMatch(html, developmentPreviewMeta);
   assert.doesNotMatch(html, /Your site is taking shape|Codex is working/i);
   assert.doesNotMatch(html, /react-loading-skeleton/);
+});
+
+test("server-renders the platform integration hub", async () => {
+  const response = await render("/integrate");
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+
+  const html = await response.text();
+  assert.match(html, /Integrate Monad RND/i);
+  assert.match(html, /Tx1 locks the request/i);
+  assert.match(html, /Tx2 finalizes and permanently stores/i);
+  assert.match(html, /production-readiness\.md/);
+  assert.match(html, /integration-guide\.md/);
+  assert.match(html, /deployment-and-verification\.md/);
+  assert.match(html, /operations-runbook\.md/);
+  assert.match(html, /reference demo, not a production SDK/i);
 });
 
 test("ships real wallet flows and removes the disposable starter preview", async () => {

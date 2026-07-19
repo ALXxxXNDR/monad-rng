@@ -9,6 +9,22 @@ The included website lets a nondeveloper connect a wallet, deploy a personal
 test instance, make a request, finalize it, and inspect the saved result. It
 does not need an application server.
 
+## Start here
+
+> **Tx1 locks the request; Tx2 finalizes and permanently stores the random
+> result. A production integration must operate both as one flow.**
+
+Read the guides in role order:
+
+1. Product leads and technical owners:
+   [`production-readiness.md`](docs/production-readiness.md)
+2. Application and smart-contract engineers:
+   [`integration-guide.md`](docs/integration-guide.md)
+3. Release and deployment engineers:
+   [`deployment-and-verification.md`](docs/deployment-and-verification.md)
+4. Operators and support teams:
+   [`operations-runbook.md`](docs/operations-runbook.md)
+
 ## What you should know first
 
 - This is **not a cryptographic VRF**. It is authenticated multi-block proposer
@@ -48,10 +64,10 @@ Tx1, Tx2, and expiry hash immediately and offers **Check submitted
 transaction**. Recovery reads the existing transaction; it does not send or
 charge for a new one.
 
-If a wallet speeds up the same transaction, the site verifies that the sender,
-nonce, destination, value, and call data are unchanged, then follows and saves
-the replacement hash. A cancelled or meaningfully different replacement is
-never accepted as the original Monad RND action.
+The demo can follow a replacement only after the original transaction becomes
+queryable. Monad public RPC does not expose mempool transactions through
+eth_getTransactionByHash, so a speed-up or cancel before inclusion may require
+manual sender-and-nonce reconciliation.
 
 Paid browser actions use Web Locks to prevent the same action from opening
 twice across tabs. A second tab sees the saved pending transaction instead of

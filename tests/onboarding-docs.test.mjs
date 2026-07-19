@@ -1,9 +1,48 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
+const publishedGuideFiles = [
+  "production-readiness.md",
+  "integration-guide.md",
+  "deployment-and-verification.md",
+  "operations-runbook.md",
+];
+
+test("publisher copies every onboarding guide byte for byte", async () => {
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "monad-rnd-onboarding-docs-"),
+  );
+
+  try {
+    const { guideFiles, publishOnboardingDocs } = await import(
+      new URL("../scripts/publish-onboarding-docs.mjs", import.meta.url)
+    );
+    assert.deepEqual(guideFiles, publishedGuideFiles);
+
+    await publishOnboardingDocs({
+      root: fileURLToPath(root),
+      outputDirectory,
+    });
+
+    await Promise.all(
+      publishedGuideFiles.map(async (file) => {
+        const [canonical, published] = await Promise.all([
+          readFile(new URL(`docs/${file}`, root)),
+          readFile(join(outputDirectory, file)),
+        ]);
+        assert.deepEqual(published, canonical, `${file} must be an exact copy`);
+      }),
+    );
+  } finally {
+    await rm(outputDirectory, { recursive: true, force: true });
+  }
+});
 
 test("readiness guide makes Tx1 and Tx2 one mandatory product flow", async () => {
   const guide = await read("docs/production-readiness.md");

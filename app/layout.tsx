@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 
 const SITE_TITLE = "Monad RND · Public randomness for Monad";
 const SITE_DESCRIPTION =
-  "Public randomness infrastructure with zero protocol fees: deploy an isolated Monad instance, lock Tx1, authenticate three headers, and store Tx2 forever.";
+  "Public randomness infrastructure with zero protocol fees: one primitive flow locks the request through Tx1, then finalizes and permanently stores the result through Tx2.";
 
 const sharedMetadata: Metadata = {
   title: SITE_TITLE,
