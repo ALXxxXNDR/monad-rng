@@ -58,6 +58,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /public/docs/
+/public/deployments/
 /work/
 /.superpowers/
 
