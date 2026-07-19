@@ -70,6 +70,10 @@ test("server-renders the complete Monad RND public-good landing page", async () 
   );
   assert.match(
     html,
+    /<section[^>]*class="public-good-section"[^>]*>(?:(?!<\/section>)[\s\S])*?<a[^>]*href="\/integrate"[^>]*>Platform onboarding →<\/a>/i,
+  );
+  assert.match(
+    html,
     /<meta(?=[^>]*property="og:image")(?=[^>]*content="http:\/\/localhost\/og\.png")[^>]*>/i,
   );
   assert.match(
@@ -88,14 +92,86 @@ test("server-renders the platform integration hub", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
+  assert.match(
+    html,
+    /<link(?=[^>]*rel="canonical")(?=[^>]*href="http:\/\/localhost\/integrate")[^>]*>/i,
+  );
+  assert.match(
+    html,
+    /<meta(?=[^>]*property="og:url")(?=[^>]*content="http:\/\/localhost\/integrate")[^>]*>/i,
+  );
+  assert.match(
+    html,
+    /<title>Integrate Monad RND · Platform onboarding<\/title>/i,
+  );
+  assert.match(
+    html,
+    /<meta(?=[^>]*name="description")(?=[^>]*content="Plan a production Monad RND integration where Tx1 locks the request and Tx2 finalizes and permanently stores the result as one operated flow\.")[^>]*>/i,
+  );
+  assert.match(
+    html,
+    /<meta(?=[^>]*property="og:image")(?=[^>]*content="http:\/\/localhost\/og\.png")[^>]*>/i,
+  );
+  assert.match(
+    html,
+    /<meta(?=[^>]*name="twitter:card")(?=[^>]*content="summary_large_image")[^>]*>/i,
+  );
+
   assert.match(html, /Integrate Monad RND/i);
-  assert.match(html, /Tx1 locks the request/i);
-  assert.match(html, /Tx2 finalizes and permanently stores/i);
-  assert.match(html, /production-readiness\.md/);
-  assert.match(html, /integration-guide\.md/);
-  assert.match(html, /deployment-and-verification\.md/);
-  assert.match(html, /operations-runbook\.md/);
+  assert.match(
+    html,
+    /Tx1 locks the request;\s*Tx2 finalizes and permanently stores the random\s*result\. A production integration must operate both as one flow\./i,
+  );
+
+  for (const guide of [
+    "production-readiness.md",
+    "integration-guide.md",
+    "deployment-and-verification.md",
+    "operations-runbook.md",
+  ]) {
+    assert.match(
+      html,
+      new RegExp(`href=["']/docs/${guide.replace(".", "\\.")}["']`, "i"),
+    );
+  }
+
+  assert.match(html, /Direct EOA/i);
+  assert.match(
+    html,
+    /same EOA must finalize directly from R\+42 through R\+103/i,
+  );
+  assert.match(html, /wrapper—not the player—becomes requester/i);
+  assert.match(html, /finalizeEntry/i);
+
+  for (const blockPoint of [
+    "R",
+    "R\\+8 · R\\+24 · R\\+40",
+    "R\\+42",
+    "R\\+104",
+    "R\\+8199",
+    "R\\+8200",
+  ]) {
+    assert.match(
+      html,
+      new RegExp(`<th[^>]*scope=["']row["'][^>]*>${blockPoint}</th>`, "i"),
+    );
+  }
+
+  assert.match(html, /Not a cryptographic VRF/i);
+  assert.match(html, /Every caller funds its own gas/i);
+  assert.match(html, /No automatic finalization or rescue/i);
+  assert.match(
+    html,
+    /Permissionless rescue only changes who is allowed to call/i,
+  );
+  assert.match(html, /RPC and replacement limits are operational risks/i);
+  assert.match(html, /Monad public RPC hides pending mempool transactions/i);
   assert.match(html, /reference demo, not a production SDK/i);
+  assert.match(html, /Expiry is terminal/i);
+  assert.match(
+    html,
+    /Expiry creates no result, protocol refund, keeper reward, or later retry right/i,
+  );
 });
 
 test("ships real wallet flows and removes the disposable starter preview", async () => {

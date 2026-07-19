@@ -1,4 +1,41 @@
+import type { Metadata, ResolvingMetadata } from "next";
 import Link from "next/link";
+
+const INTEGRATE_TITLE = "Integrate Monad RND · Platform onboarding";
+const INTEGRATE_DESCRIPTION =
+  "Plan a production Monad RND integration where Tx1 locks the request and Tx2 finalizes and permanently stores the result as one operated flow.";
+
+export async function generateMetadata(
+  _props: Record<string, never>,
+  parent: ResolvingMetadata,
+): Promise<Metadata> {
+  const parentMetadata = await parent;
+  const integrateUrl = parentMetadata.metadataBase
+    ? new URL("/integrate", parentMetadata.metadataBase)
+    : "/integrate";
+
+  return {
+    title: INTEGRATE_TITLE,
+    description: INTEGRATE_DESCRIPTION,
+    alternates: {
+      canonical: integrateUrl,
+    },
+    openGraph: {
+      type: "website",
+      url: integrateUrl,
+      siteName: parentMetadata.openGraph?.siteName ?? "Monad RND",
+      title: INTEGRATE_TITLE,
+      description: INTEGRATE_DESCRIPTION,
+      images: parentMetadata.openGraph?.images ?? undefined,
+    },
+    twitter: {
+      card: parentMetadata.twitter?.card ?? "summary_large_image",
+      title: INTEGRATE_TITLE,
+      description: INTEGRATE_DESCRIPTION,
+      images: parentMetadata.twitter?.images ?? undefined,
+    },
+  };
+}
 
 const guides = [
   {
